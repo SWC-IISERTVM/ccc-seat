@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.1/+esm">
   <link rel="stylesheet" href="./assets/css/styles.css">
 </head>
 <body>
@@ -135,32 +136,48 @@
               <span class="rule-clause-body">Every break is limited to 15 minutes. No extensions are permitted.</span>
             </li>
             <li class="rule-clause">
-              <span class="rule-clause-title">Rule 2 &mdash; One break per hour</span>
-              <span class="rule-clause-body">Each roll number can activate only one break within a rolling 60-minute period.</span>
+              <span class="rule-clause-title">Rule 2 &mdash; One break per hour per account</span>
+              <span class="rule-clause-body">Each authenticated account can activate only one break within a rolling 60-minute period.</span>
             </li>
             <li class="rule-clause">
-              <span class="rule-clause-title">Rule 3 &mdash; No computer reservation</span>
+              <span class="rule-clause-title">Rule 3 &mdash; One active computer per account</span>
+              <span class="rule-clause-body">Each account may hold at most one active break across both CCC and IDC facilities simultaneously.</span>
+            </li>
+            <li class="rule-clause">
+              <span class="rule-clause-title">Rule 4 &mdash; No computer reservation</span>
               <span class="rule-clause-body">This website is NOT a computer reservation system. You cannot reserve a computer by leaving your belongings on it.</span>
             </li>
             <li class="rule-clause">
-              <span class="rule-clause-title">Rule 4 &mdash; Activate the timer before leaving</span>
-              <span class="rule-clause-body">If you leave your computer without activating the break timer, the computer has no active digital break protection.</span>
+              <span class="rule-clause-title">Rule 5 &mdash; Activate before stepping away</span>
+              <span class="rule-clause-body">If you step away without activating the break timer, your workstation has no active break status.</span>
             </li>
             <li class="rule-clause">
-              <span class="rule-clause-title">Rule 5 &mdash; Timer expiry</span>
-              <span class="rule-clause-body">Once the timer expires, the computer automatically returns to its blank state. Other students may then use the computer in accordance with the lab rules.</span>
-            </li>
-            <li class="rule-clause">
-              <span class="rule-clause-title">Rule 6 &mdash; Follow the rules</span>
-              <span class="rule-clause-body">Students are expected to respect the system and one another.</span>
+              <span class="rule-clause-title">Rule 6 &mdash; Automatic expiry</span>
+              <span class="rule-clause-body">Once the timer expires, the computer automatically returns to blank. Other students may then use it per lab policy.</span>
             </li>
           </ul>
         </div>
       </div>
 
-      <!-- Administrative Non-Enforcement Notice -->
+      <!-- Section 03: Account-Based Usage & Privacy Notice -->
+      <div class="disclaimer-panel" style="margin-bottom: 20px;" role="note" aria-labelledby="policyHeading">
+        <div id="policyHeading" class="disclaimer-tag">03 &mdash; Account-Based Usage &amp; Privacy Policy</div>
+        <div class="disclaimer-prose">
+          <p>
+            Break timers are linked directly to your authenticated Google account. You do not need to enter a roll number to start a break.
+          </p>
+          <p>
+            Each account can have only <strong>one active break timer at a time across both computer labs</strong>. Opening another tab, browser, or device does not allow you to start another break. A rolling 60-minute cooldown also applies to each account from the moment a break is activated.
+          </p>
+          <p>
+            <strong>Privacy Statement:</strong> The application uses your authenticated account identity to enforce fair usage. Only the minimal information necessary to operate the break timer is processed. Your email address is strictly confidential and is <strong>never displayed publicly</strong> on the computer-status dashboard. Public monitors display workstation numbers and countdown timers only.
+          </p>
+        </div>
+      </div>
+
+      <!-- Section 04: Administrative Non-Enforcement Notice -->
       <div class="disclaimer-panel" role="note" aria-labelledby="disclaimerHeading">
-        <div id="disclaimerHeading" class="disclaimer-tag">03 &mdash; Important Notice</div>
+        <div id="disclaimerHeading" class="disclaimer-tag">04 &mdash; Important Notice</div>
         <div class="disclaimer-prose">
           <p>
             This website is an independently developed utility intended to encourage fair and responsible use of computer lab facilities.

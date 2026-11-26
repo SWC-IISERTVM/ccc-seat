@@ -54,13 +54,15 @@ CREATE TABLE IF NOT EXISTS public.app_config (
 
 -- 5. PRIVATE BREAK_HISTORY Table
 -- Stores historical records and current active break metadata.
--- Holds the HMAC roll key and break token SHA-256 hash.
+-- Holds the authenticated account identity (auth.uid() and verified email).
 -- STRICTLY PRIVATE: No anon access.
 CREATE TABLE IF NOT EXISTS public.break_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     computer_id UUID NOT NULL REFERENCES public.computers(id) ON DELETE CASCADE,
-    roll_key TEXT NOT NULL, -- HMAC-SHA256(normalized_roll, secret_pepper)
-    break_token_hash TEXT NOT NULL, -- SHA-256(raw_one_time_token)
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL, -- Canonical authenticated identity (auth.uid())
+    user_email TEXT, -- Verified institutional email (@iisertvm.ac.in)
+    roll_key TEXT, -- HMAC-SHA256(normalized_roll, secret_pepper) (optional/legacy)
+    break_token_hash TEXT, -- SHA-256(raw_one_time_token) for device storage
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     scheduled_expires_at TIMESTAMPTZ NOT NULL,
     ended_at TIMESTAMPTZ,
@@ -68,8 +70,18 @@ CREATE TABLE IF NOT EXISTS public.break_history (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Index for rolling 60-minute cooldown checks on student roll keys
-CREATE INDEX IF NOT EXISTS idx_break_history_roll_started ON public.break_history (roll_key, started_at DESC);
+-- Partial Unique Index: Strictly enforces AT MOST ONE active break per account across both labs!
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_break_user 
+    ON public.break_history (user_id) 
+    WHERE ended_at IS NULL;
+
+-- Partial Unique Index: Strictly enforces AT MOST ONE active break per computer!
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_break_computer 
+    ON public.break_history (computer_id) 
+    WHERE ended_at IS NULL;
+
+-- Index for rolling 60-minute cooldown checks on student accounts
+CREATE INDEX IF NOT EXISTS idx_break_history_user_cooldown ON public.break_history (user_id, started_at DESC);
 
 -- Index for locating active break by computer
 CREATE INDEX IF NOT EXISTS idx_break_history_computer_active ON public.break_history (computer_id, ended_at) WHERE ended_at IS NULL;

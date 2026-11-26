@@ -26,7 +26,8 @@ const state = {
   activeModalPcId: null,
   deepLinkHandled: false,
   currentUser: null,
-  isAdmin: false
+  isAdmin: false,
+  myActiveBreak: null // Active break record owned by the authenticated student
 };
 
 // DOM Elements
@@ -134,11 +135,25 @@ function extractRollFromEmail(email) {
 }
 
 /**
- * Check active user session and enforce @iisertvm.ac.in restriction
+ * Sanitize strings for safe HTML interpolation
  */
-async function checkUserAuth() {
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * Check active user session and enforce @iisertvm.ac.in restriction
+ * Uses cached session if provided to eliminate duplicate network roundtrips
+ */
+async function checkUserAuth(existingSession = null) {
   try {
-    const session = await api.getUserSession();
+    const session = existingSession !== null ? existingSession : await api.getUserSession();
     if (session && session.user && session.user.email) {
       const email = session.user.email.toLowerCase();
 
@@ -150,6 +165,7 @@ async function checkUserAuth() {
           await api.signOut();
           state.currentUser = null;
           state.isAdmin = false;
+          state.myActiveBreak = null;
           showDomainAlert(`Access restricted: Only @iisertvm.ac.in institutional accounts are permitted. (${session.user.email} signed out)`);
           renderUserAuthUI();
           return;
@@ -157,18 +173,36 @@ async function checkUserAuth() {
       }
 
       state.currentUser = session.user;
-      state.isAdmin = await api.isCurrentUserAdmin();
       hideDomainAlert();
       renderUserAuthUI();
+
+      // Parallel non-blocking lookup of active break and admin privileges
+      api.getMyActiveBreak().then(activeBreak => {
+        if (activeBreak && activeBreak.has_active_break) {
+          state.myActiveBreak = activeBreak;
+          renderGrid();
+        } else {
+          state.myActiveBreak = null;
+        }
+      });
+
+      api.isCurrentUserAdmin().then(isAdmin => {
+        if (state.isAdmin !== isAdmin) {
+          state.isAdmin = isAdmin;
+          renderUserAuthUI();
+        }
+      });
     } else {
       state.currentUser = null;
       state.isAdmin = false;
+      state.myActiveBreak = null;
       renderUserAuthUI();
     }
   } catch (err) {
     console.warn('Auth check warning:', err);
     state.currentUser = null;
     state.isAdmin = false;
+    state.myActiveBreak = null;
     renderUserAuthUI();
   }
 }
@@ -200,10 +234,11 @@ function renderUserAuthUI() {
   if (!dom.userAuthArea) return;
 
   if (state.currentUser) {
-    const email = state.currentUser.email;
-    const shortEmail = email.length > 20 ? email.slice(0, 18) + '…' : email;
+    const rawEmail = state.currentUser.email || '';
+    const safeEmail = escapeHtml(rawEmail);
+    const shortEmail = safeEmail.length > 20 ? safeEmail.slice(0, 18) + '…' : safeEmail;
     dom.userAuthArea.innerHTML = `
-      <div class="user-pill" title="${email}">
+      <div class="user-pill" title="${safeEmail}">
         <span class="user-pill-email">${shortEmail}</span>
         <span class="user-pill-tag">Verified</span>
         <button type="button" id="headerSignOutBtn" class="user-pill-signout" title="Sign Out">Sign Out</button>
@@ -252,7 +287,9 @@ async function handleUserSignOut() {
   }
   state.currentUser = null;
   state.isAdmin = false;
+  state.myActiveBreak = null;
   renderUserAuthUI();
+  renderGrid();
 
   if (state.activeModalPcId) {
     const pc = state.computers.get(state.activeModalPcId);
@@ -391,7 +428,7 @@ function createPcTileElement(pc) {
  */
 function updateTileVisual(tile, pc) {
   const isExpired = time.isBreakExpired(pc.break_expires_at);
-  const isMyBreak = !!state.localTokens[pc.id];
+  const isMyBreak = (state.myActiveBreak && state.myActiveBreak.computer_id === pc.id) || !!state.localTokens[pc.id];
 
   tile.className = 'pc-tile';
   if (state.connectionStatus === 'offline') {
@@ -416,7 +453,7 @@ function updateTileVisual(tile, pc) {
     tile.innerHTML = `
       <div class="pc-tile-number">PC ${String(pc.pc_number).padStart(2, '0')}</div>
       <div class="pc-tile-break-info">
-        <span class="pc-tile-badge">BREAK</span>
+        <span class="pc-tile-badge">${isMyBreak ? 'MY BREAK' : 'BREAK'}</span>
         <span class="pc-tile-timer tabular-nums" data-timer-for="${pc.id}">${rem.mm}:${rem.ss}</span>
       </div>
     `;
@@ -447,6 +484,9 @@ function tickCountdowns() {
       if (state.localTokens[pcId]) {
         delete state.localTokens[pcId];
         saveLocalTokens();
+      }
+      if (state.myActiveBreak && state.myActiveBreak.computer_id === pcId) {
+        state.myActiveBreak = null;
       }
       // If modal is currently viewing this PC, re-render modal
       if (state.activeModalPcId === pcId) {
@@ -491,13 +531,16 @@ function openBreakModal(pcId) {
 
   // Focus trap / auto-focus
   setTimeout(() => {
-    const rollInput = document.getElementById('rollNumberInput');
-    if (rollInput) {
-      rollInput.focus();
-    } else {
-      const closeBtn = dom.modalCloseBtn;
-      if (closeBtn) closeBtn.focus();
-    }
+    const startBtn = document.getElementById('startBreakSubmitBtn');
+    const backBtn = document.getElementById('imBackBtn');
+    const viewBtn = document.getElementById('viewMyBreakBtn');
+    const googleBtn = document.getElementById('modalGoogleSignInBtn');
+    const closeBtn = dom.modalCloseBtn;
+    if (startBtn) startBtn.focus();
+    else if (backBtn) backBtn.focus();
+    else if (viewBtn) viewBtn.focus();
+    else if (googleBtn) googleBtn.focus();
+    else if (closeBtn) closeBtn.focus();
   }, 100);
 }
 
@@ -517,6 +560,7 @@ function closeModal() {
 function renderModalContent(pc) {
   const isExpired = time.isBreakExpired(pc.break_expires_at);
   const myTokenInfo = state.localTokens[pc.id];
+  const isMyBreak = (state.myActiveBreak && state.myActiveBreak.computer_id === pc.id) || !!myTokenInfo;
 
   if (isExpired) {
     // --------------------------------------------------------------------------
@@ -550,45 +594,63 @@ function renderModalContent(pc) {
       if (modalSignInBtn) {
         modalSignInBtn.addEventListener('click', () => handleStudentGoogleSignIn(pc));
       }
+    } else if (state.myActiveBreak && state.myActiveBreak.computer_id !== pc.id) {
+      // Student already has an active break on a different computer!
+      dom.modalSubtitle.textContent = 'Account limit reached';
+      dom.modalBody.innerHTML = `
+        <div class="active-break-notice-card" style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-amber);">Active Break in Progress</span>
+            <span class="user-pill-tag">1 Account = 1 PC</span>
+          </div>
+          <p style="font-size: 14px; margin: 0 0 10px 0; color: var(--text-primary); line-height: 1.5;">
+            You already have an active break on <strong>PC ${String(state.myActiveBreak.pc_number).padStart(2, '0')}</strong> in <strong>${escapeHtml(state.myActiveBreak.lab_name || 'Lab')}</strong>.
+          </p>
+          <p class="form-hint" style="margin: 0 0 16px 0; line-height: 1.4;">
+            To ensure fair resource sharing, your account may only hold one computer on break at a time across all labs. You can start another break after your active break finishes.
+          </p>
+          <button type="button" id="viewMyBreakBtn" class="btn btn-outline" style="width: 100%;">
+            Go to My Active PC (${String(state.myActiveBreak.pc_number).padStart(2, '0')})
+          </button>
+        </div>
+      `;
+
+      const viewBtn = document.getElementById('viewMyBreakBtn');
+      if (viewBtn) {
+        viewBtn.addEventListener('click', async () => {
+          const targetBreak = state.myActiveBreak;
+          if (!targetBreak) return;
+          if (targetBreak.lab_id && targetBreak.lab_id !== state.selectedLabId) {
+            await switchLab(targetBreak.lab_id);
+          }
+          openBreakModal(targetBreak.computer_id);
+        });
+      }
     } else {
-      // Student is signed in with @iisertvm.ac.in (or admin)
-      const autoRoll = extractRollFromEmail(state.currentUser.email);
+      // Student is signed in and eligible to start a break (NO ROLL NUMBER ENTRY)
       dom.modalSubtitle.textContent = 'No active break timer';
       dom.modalBody.innerHTML = `
-        <div class="student-session-box">
-          <div class="student-session-header">
-            <span class="student-session-label">Verified Student Account</span>
-            <span class="user-pill-tag">IISER TVM</span>
+        <div class="student-session-box" style="margin-bottom: 16px;">
+          <div class="student-session-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span class="student-session-label" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 600;">Verified Account</span>
+            <span class="user-pill-tag" style="font-size: 11px; background: rgba(52, 168, 83, 0.1); color: #1e8e3e; padding: 2px 6px; border-radius: 4px; font-weight: 500;">IISER TVM</span>
           </div>
-          <div class="student-session-email">${state.currentUser.email}</div>
+          <div class="student-session-email" style="font-weight: 600; font-size: 13px; color: var(--text-primary); word-break: break-all;">${escapeHtml(state.currentUser.email)}</div>
         </div>
 
-        <div class="info-row">
-          <span class="info-label">Break Duration</span>
-          <span class="info-val">15 Minutes (Fixed)</span>
+        <div class="info-row" style="display: flex; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); margin-bottom: 16px;">
+          <span class="info-label" style="font-size: 13px; color: var(--text-muted);">Duration</span>
+          <span class="info-val" style="font-size: 13px; font-weight: 600; color: var(--text-primary);">15 Minutes (Fixed)</span>
         </div>
 
         <div id="modalError" class="form-error" role="alert"></div>
 
         <form id="startBreakForm" autocomplete="off">
-          <div class="form-group">
-            <label for="rollNumberInput" class="form-label">College Roll Number</label>
-            <input
-              type="text"
-              id="rollNumberInput"
-              name="rollNumber"
-              class="form-input"
-              placeholder="e.g. IMS22001 or PHD22001"
-              value="${autoRoll}"
-              required
-              maxlength="20"
-              autocapitalize="characters"
-              spellcheck="false"
-            />
-            <div class="form-hint">Accepted prefixes: IMS, MSC, IPHD, PHD (e.g. IMS22001). Never shown publicly.</div>
-          </div>
+          <p class="form-hint" style="margin-top: 0; margin-bottom: 16px; line-height: 1.4;">
+            Starting a break reserves this computer for 15 minutes. One break per account across all labs. A rolling 60-minute cooldown applies.
+          </p>
 
-          <button type="submit" id="startBreakSubmitBtn" class="btn btn-primary">
+          <button type="submit" id="startBreakSubmitBtn" class="btn btn-primary" style="width: 100%;">
             Start 15-Minute Break
           </button>
         </form>
@@ -609,77 +671,43 @@ function renderModalContent(pc) {
     const rem = time.getRemainingTime(pc.break_expires_at);
     dom.modalSubtitle.textContent = 'Break timer in progress';
 
-    if (myTokenInfo) {
-      // Current device started this break
+    if (isMyBreak) {
+      // Current authenticated student owns this break
+      const token = myTokenInfo ? myTokenInfo.token : null;
       dom.modalBody.innerHTML = `
         <div class="active-break-display">
           <div id="modalActiveCountdown" class="active-break-countdown tabular-nums">${rem.mm}:${rem.ss}</div>
-          <div class="active-break-note">Active on this device</div>
+          <div class="active-break-note">Your Active Break</div>
         </div>
 
         <div id="modalError" class="form-error" role="alert"></div>
 
-        <button type="button" id="imBackBtn" class="btn btn-primary">
+        <button type="button" id="imBackBtn" class="btn btn-primary" style="width: 100%;">
           I'm Back (End Break Early)
         </button>
-        <div class="form-hint" style="text-align: center; margin-top: 8px;">
-          Ending your break early frees this computer immediately. The 60-minute cooldown remains active.
+        <div class="form-hint" style="text-align: center; margin-top: 8px; line-height: 1.4;">
+          Ending your break early frees this computer immediately. Your 60-minute rolling cooldown remains active.
         </div>
       `;
 
       const imBackBtn = document.getElementById('imBackBtn');
-      imBackBtn.addEventListener('click', () => handleEndBreak(pc.id, myTokenInfo.token, null));
+      if (imBackBtn) {
+        imBackBtn.addEventListener('click', () => handleEndBreak(pc.id, token));
+      }
     } else {
-      // Another device or guest started this break
+      // Another student started this break
       dom.modalBody.innerHTML = `
         <div class="active-break-display">
           <div id="modalActiveCountdown" class="active-break-countdown tabular-nums">${rem.mm}:${rem.ss}</div>
-          <div class="active-break-note">Break started by another student</div>
+          <div class="active-break-note">Break timer in progress by another student</div>
         </div>
 
         <div id="modalError" class="form-error" role="alert"></div>
 
-        <div class="alt-action-container">
-          <button type="button" id="toggleOwnerVerifyBtn" class="alt-action-toggle">
-            Did you start this break from another device? Return early
-          </button>
-
-          <div id="ownerVerifyPanel" class="alt-action-panel">
-            <div class="form-group">
-              <label for="verifyRollInput" class="form-label">Verify Your Roll Number</label>
-              <input
-                type="text"
-                id="verifyRollInput"
-                class="form-input"
-                placeholder="Enter roll number"
-                autocapitalize="characters"
-              />
-            </div>
-            <button type="button" id="verifyEndBtn" class="btn btn-outline">
-              Verify & End Break
-            </button>
-          </div>
-        </div>
+        <p class="form-hint" style="text-align: center; margin-top: 14px; line-height: 1.4;">
+          This computer is currently reserved. When the timer expires, the computer will automatically revert to blank and become available.
+        </p>
       `;
-
-      const toggleBtn = document.getElementById('toggleOwnerVerifyBtn');
-      const panel = document.getElementById('ownerVerifyPanel');
-      const verifyEndBtn = document.getElementById('verifyEndBtn');
-      const verifyRollInput = document.getElementById('verifyRollInput');
-
-      toggleBtn.addEventListener('click', () => {
-        panel.classList.toggle('is-open');
-        if (panel.classList.contains('is-open')) verifyRollInput.focus();
-      });
-
-      verifyEndBtn.addEventListener('click', () => {
-        const rollVal = verifyRollInput.value.trim();
-        if (!rollVal) {
-          showModalError('Please enter your roll number.');
-          return;
-        }
-        handleEndBreak(pc.id, null, rollVal);
-      });
     }
   }
 }
@@ -696,39 +724,44 @@ function showModalError(message) {
 }
 
 /**
- * Handle Start Break form submission
+ * Handle Start Break form submission (Account identity verified by backend)
  */
 async function handleStartBreakSubmit(pc) {
-  const rollInput = document.getElementById('rollNumberInput');
   const submitBtn = document.getElementById('startBreakSubmitBtn');
-  const rollNumber = rollInput.value.trim().toUpperCase();
-
-  if (!rollNumber) {
-    showModalError('Please enter your college roll number.');
-    rollInput.focus();
-    return;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Starting Break...';
   }
 
-  submitBtn.disabled = true;
-  submitBtn.textContent = 'Starting Break...';
-
   try {
-    const res = await api.startBreak(pc.lab_id, pc.pc_number, rollNumber);
+    const res = await api.startBreak(pc.lab_id, pc.pc_number);
 
     if (!res.success) {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Start 15-Minute Break';
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Start 15-Minute Break';
+      }
 
-      if (res.error_code === 'COOLDOWN') {
+      if (res.error_code === 'ACTIVE_BREAK_EXISTS') {
+        showModalError(res.message || 'You already have an active break on another computer.');
+        api.getMyActiveBreak().then(activeBreak => {
+          if (activeBreak && activeBreak.has_active_break) {
+            state.myActiveBreak = activeBreak;
+            renderGrid();
+            renderModalContent(pc);
+          }
+        });
+      } else if (res.error_code === 'COOLDOWN') {
         const eligibleTime = res.eligible_at ? time.formatLocalTime(res.eligible_at) : 'later';
         showModalError(`Cooldown active: You can only take one break per rolling 60 minutes. Eligible again at ${eligibleTime}.`);
       } else if (res.error_code === 'PC_BUSY') {
         showModalError('This computer already has an active break timer.');
-        // Refresh local view
         await loadComputersForLab(pc.lab_id);
         renderGrid();
-      } else if (res.error_code === 'INVALID_ROLL') {
-        showModalError(res.message || 'Invalid roll number format.');
+      } else if (res.error_code === 'RACE_DETECTED') {
+        showModalError('Another break was just registered on this computer or account. Please refresh.');
+        await loadComputersForLab(pc.lab_id);
+        renderGrid();
       } else if (res.error_code === 'AUTH_REQUIRED') {
         showModalError('Institutional sign-in required. Please sign in with your @iisertvm.ac.in Google account.');
         state.currentUser = null;
@@ -753,6 +786,16 @@ async function handleStartBreakSubmit(pc) {
     };
     saveLocalTokens();
 
+    const activeLab = state.labs.find(l => l.id === pc.lab_id);
+    state.myActiveBreak = {
+      has_active_break: true,
+      computer_id: pc.id,
+      pc_number: pc.pc_number,
+      lab_id: pc.lab_id,
+      lab_name: activeLab ? activeLab.name : 'Lab',
+      expires_at: res.break_expires_at
+    };
+
     // Update local computer model
     pc.break_started_at = res.break_started_at;
     pc.break_expires_at = res.break_expires_at;
@@ -768,8 +811,10 @@ async function handleStartBreakSubmit(pc) {
     renderModalContent(pc);
   } catch (err) {
     console.error('Error starting break:', err);
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Start 15-Minute Break';
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Start 15-Minute Break';
+    }
     showModalError('Network error. Please verify your connection.');
   }
 }
@@ -777,20 +822,20 @@ async function handleStartBreakSubmit(pc) {
 /**
  * Handle ending a break ("I'm Back" action)
  */
-async function handleEndBreak(computerId, token, rollNumber) {
-  const btn = document.getElementById('imBackBtn') || document.getElementById('verifyEndBtn');
+async function handleEndBreak(computerId, token = null) {
+  const btn = document.getElementById('imBackBtn');
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Ending break...';
   }
 
   try {
-    const res = await api.endBreak(computerId, token, rollNumber);
+    const res = await api.endBreak(computerId, token);
 
     if (!res.success) {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = token ? "I'm Back (End Break Early)" : "Verify & End Break";
+        btn.textContent = "I'm Back (End Break Early)";
       }
       showModalError(res.message || 'Could not end break.');
       return;
@@ -799,6 +844,7 @@ async function handleEndBreak(computerId, token, rollNumber) {
     // Remove token from local storage
     delete state.localTokens[computerId];
     saveLocalTokens();
+    state.myActiveBreak = null;
 
     // Reset computer in memory
     const pc = state.computers.get(computerId);
@@ -810,13 +856,14 @@ async function handleEndBreak(computerId, token, rollNumber) {
       if (tile) updateTileVisual(tile, pc);
     }
 
-    announceAria(`Break ended on PC. Computer is now blank.`);
+    announceAria('Break ended on PC. Computer is now blank.');
     closeModal();
+    renderGrid();
   } catch (err) {
     console.error('Error ending break:', err);
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "I'm Back";
+      btn.textContent = "I'm Back (End Break Early)";
     }
     showModalError('Network error while ending break.');
   }
@@ -896,6 +943,11 @@ function triggerDeepLinkPc(pcParam) {
 async function init() {
   loadLocalTokens();
 
+  // If OAuth redirected back with access token hash, clean URL without page reload
+  if (window.location.hash && window.location.hash.includes('access_token')) {
+    history.replaceState(null, document.title, window.location.pathname + window.location.search);
+  }
+
   // Modal event listeners
   if (dom.modalCloseBtn) {
     dom.modalCloseBtn.addEventListener('click', closeModal);
@@ -935,23 +987,40 @@ async function init() {
     }
   });
 
-  // Initial time sync & user verification
-  await api.syncDatabaseClock();
-  await checkUserAuth();
+  // Track user ID to debounce redundant onAuthStateChange runs
+  let lastCheckedUserId = undefined;
 
   // Listen for auth state changes (OAuth redirects or sign-outs)
   api.onAuthStateChange(async (event, session) => {
-    await checkUserAuth();
+    const userId = session?.user?.id || null;
+    if (userId === lastCheckedUserId && event !== 'SIGNED_OUT') {
+      return; // Skip duplicate auth triggers on INITIAL_SESSION + SIGNED_IN
+    }
+    lastCheckedUserId = userId;
+    await checkUserAuth(session);
     if (state.activeModalPcId) {
       const pc = state.computers.get(state.activeModalPcId);
       if (pc) renderModalContent(pc);
     }
   });
 
-  // Load labs
+  // Parallel initial data load (eliminates serial waterfalls!)
   try {
-    state.labs = await api.fetchLabs();
-    if (state.labs.length > 0) {
+    const [clockRes, sessionRes, labsRes] = await Promise.allSettled([
+      api.syncDatabaseClock(),
+      api.getUserSession(),
+      api.fetchLabs()
+    ]);
+
+    if (sessionRes.status === 'fulfilled' && sessionRes.value) {
+      lastCheckedUserId = sessionRes.value.user?.id || null;
+      await checkUserAuth(sessionRes.value);
+    } else {
+      await checkUserAuth(null);
+    }
+
+    if (labsRes.status === 'fulfilled' && labsRes.value && labsRes.value.length > 0) {
+      state.labs = labsRes.value;
       state.selectedLabId = state.labs[0].id;
       renderLabTabs();
       await loadComputersForLab(state.selectedLabId);

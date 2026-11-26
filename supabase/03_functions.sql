@@ -123,20 +123,21 @@ END;
 $$;
 
 -- ------------------------------------------------------------------------------
--- 4. START_BREAK: Atomic Break Creation RPC
+-- 4. START_BREAK: Account-Identified Atomic Break Creation RPC
 -- ------------------------------------------------------------------------------
 -- Enforces:
--- 1. Exact 15-minute duration (server controlled, client cannot pass duration).
--- 2. Normalized roll regex validation.
--- 3. Roll-key HMAC-SHA256 with private secret pepper.
--- 4. Advisory lock on roll key (prevents concurrent race conditions).
--- 5. Exclusive row lock on computer (FOR UPDATE).
--- 6. Rolling 60-minute cooldown from previous break start.
--- 7. Returns random one-time break token (only SHA-256 hash stored in DB).
+-- 1. Verified institutional domain (@iisertvm.ac.in) via auth.uid() & JWT context.
+-- 2. Exact 15-minute duration (server-controlled, client cannot modify duration).
+-- 3. Atomic reconciliation of naturally expired records before checking limits.
+-- 4. Advisory lock on authenticated user ID (prevents concurrent race conditions).
+-- 5. Strict Account Invariant: Exactly ONE active break per account across both labs.
+-- 6. Rolling 60-minute cooldown calculated from authenticated user's previous start.
+-- 7. Row lock on computer (FOR UPDATE) & database partial unique constraints.
+-- 8. Returns random one-time break token stored in student's browser localStorage.
 CREATE OR REPLACE FUNCTION public.start_break(
     p_lab_id UUID,
     p_pc_number INTEGER,
-    p_roll_number TEXT
+    p_roll_number TEXT DEFAULT NULL -- Obsolete parameter preserved for backward-compatibility
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -144,13 +145,10 @@ SECURITY DEFINER
 SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
-    v_norm_roll TEXT;
-    v_roll_regex TEXT;
-    v_pepper TEXT;
-    v_roll_key TEXT;
-    v_ip_header TEXT;
-    v_ip_hash TEXT;
+    v_user_id UUID;
+    v_user_email TEXT;
     v_computer RECORD;
+    v_active_break RECORD;
     v_last_started TIMESTAMPTZ;
     v_eligible_at TIMESTAMPTZ;
     v_raw_token TEXT;
@@ -158,11 +156,13 @@ DECLARE
     v_now TIMESTAMPTZ;
     v_expires_at TIMESTAMPTZ;
     v_break_id UUID;
+    v_ip_header TEXT;
+    v_ip_hash TEXT;
     v_rate_ok BOOLEAN;
-    v_user_email TEXT;
 BEGIN
-    -- 0. Institutional domain verification (@iisertvm.ac.in)
-    IF auth.uid() IS NULL THEN
+    -- 1. Identity & Domain Verification (auth.uid() and institutional @iisertvm.ac.in)
+    v_user_id := auth.uid();
+    IF v_user_id IS NULL THEN
         RETURN jsonb_build_object(
             'success', false,
             'error_code', 'AUTH_REQUIRED',
@@ -175,11 +175,11 @@ BEGIN
         RETURN jsonb_build_object(
             'success', false,
             'error_code', 'UNAUTHORIZED_DOMAIN',
-            'message', 'Access restricted: Only verified @iisertvm.ac.in accounts are permitted.'
+            'message', 'Access restricted: Only verified @iisertvm.ac.in institutional accounts are permitted.'
         );
     END IF;
 
-    -- 1. Extract best-effort IP header from PostgREST environment
+    -- 2. IP extraction & rate limiting (abuse prevention)
     BEGIN
         v_ip_header := current_setting('request.headers', true)::json->>'x-forwarded-for';
     EXCEPTION WHEN OTHERS THEN
@@ -191,46 +191,7 @@ BEGIN
         v_ip_hash := 'anonymous';
     END IF;
 
-    -- 2. Validate roll number input
-    IF p_roll_number IS NULL OR trim(p_roll_number) = '' THEN
-        RETURN jsonb_build_object(
-            'success', false,
-            'error_code', 'INVALID_ROLL',
-            'message', 'Roll number is required.'
-        );
-    END IF;
-
-    v_norm_roll := upper(trim(p_roll_number));
-
-    -- Load roll regex pattern from private app_config
-    SELECT value INTO v_roll_regex
-    FROM public.app_config
-    WHERE key = 'roll_regex';
-
-    IF v_roll_regex IS NOT NULL AND v_roll_regex <> '' THEN
-        IF v_norm_roll !~ v_roll_regex THEN
-            RETURN jsonb_build_object(
-                'success', false,
-                'error_code', 'INVALID_ROLL',
-                'message', 'Roll number does not match the college format requirements.'
-            );
-        END IF;
-    END IF;
-
-    -- Load secret pepper from private app_config
-    SELECT value INTO v_pepper
-    FROM public.app_config
-    WHERE key = 'roll_pepper';
-
-    IF v_pepper IS NULL OR length(v_pepper) < 16 THEN
-        RAISE EXCEPTION 'System configuration error: roll_pepper is not configured properly in app_config.';
-    END IF;
-
-    -- Compute HMAC-SHA256 roll key
-    v_roll_key := encode(hmac(v_norm_roll::bytea, v_pepper::bytea, 'sha256'), 'hex');
-
-    -- Best-effort rate limiting
-    v_rate_ok := public.check_rate_limit(v_ip_hash, v_roll_key, 'start_break');
+    v_rate_ok := public.check_rate_limit(v_ip_hash, v_user_id::text, 'start_break');
     IF NOT v_rate_ok THEN
         RETURN jsonb_build_object(
             'success', false,
@@ -239,11 +200,66 @@ BEGIN
         );
     END IF;
 
-    -- 3. Take advisory transaction lock on the student's roll key
-    -- Guarantees that concurrent requests for the same roll key run strictly serialized.
-    PERFORM pg_advisory_xact_lock(hashtext('roll:' || v_roll_key));
+    -- 3. Atomic reconciliation of naturally expired breaks before evaluating constraints
+    -- Guarantees expired timers cannot block users
+    UPDATE public.break_history
+    SET ended_at = scheduled_expires_at,
+        end_reason = 'expired'
+    WHERE ended_at IS NULL
+      AND scheduled_expires_at <= clock_timestamp();
 
-    -- 4. Lock and verify the computer row
+    UPDATE public.computers
+    SET break_started_at = NULL,
+        break_expires_at = NULL,
+        updated_at = clock_timestamp()
+    WHERE break_expires_at IS NOT NULL
+      AND break_expires_at <= clock_timestamp();
+
+    -- 4. Serialized transaction locking per user account (pg_advisory_xact_lock)
+    -- Serializes concurrent calls from the same student across devices/tabs
+    PERFORM pg_advisory_xact_lock(hashtext('user:' || v_user_id::text));
+
+    -- 5. Strict Account Constraint: Exactly ONE active break per account across both labs
+    SELECT bh.computer_id, c.pc_number, l.name AS lab_name, bh.scheduled_expires_at
+    INTO v_active_break
+    FROM public.break_history bh
+    JOIN public.computers c ON c.id = bh.computer_id
+    JOIN public.labs l ON l.id = c.lab_id
+    WHERE bh.user_id = v_user_id
+      AND bh.ended_at IS NULL
+      AND bh.scheduled_expires_at > clock_timestamp();
+
+    IF FOUND THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'ACTIVE_BREAK_EXISTS',
+            'message', format('You already have an active break on PC %s in %s. You can start another break after your current break ends.', 
+                              lpad(v_active_break.pc_number::text, 2, '0'), v_active_break.lab_name),
+            'active_pc_number', v_active_break.pc_number,
+            'active_lab_name', v_active_break.lab_name,
+            'active_expires_at', to_char(v_active_break.scheduled_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        );
+    END IF;
+
+    -- 6. Rolling 60-Minute Cooldown by Account
+    SELECT started_at INTO v_last_started
+    FROM public.break_history
+    WHERE user_id = v_user_id
+      AND started_at > (clock_timestamp() - interval '60 minutes')
+    ORDER BY started_at DESC
+    LIMIT 1;
+
+    IF v_last_started IS NOT NULL THEN
+        v_eligible_at := v_last_started + interval '60 minutes';
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'COOLDOWN',
+            'message', 'Cooldown active: Each account can only initiate one break every rolling 60 minutes.',
+            'eligible_at', to_char(v_eligible_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        );
+    END IF;
+
+    -- 7. Lock and verify requested computer
     SELECT * INTO v_computer
     FROM public.computers
     WHERE lab_id = p_lab_id
@@ -258,8 +274,6 @@ BEGIN
         );
     END IF;
 
-    -- Check if computer currently has an active break
-    -- Note: Expiry is checked strictly against database time
     IF v_computer.break_expires_at IS NOT NULL AND v_computer.break_expires_at > clock_timestamp() THEN
         RETURN jsonb_build_object(
             'success', false,
@@ -268,84 +282,71 @@ BEGIN
         );
     END IF;
 
-    -- 5. Check rolling 60-minute cooldown on the student's roll key
-    SELECT started_at INTO v_last_started
-    FROM public.break_history
-    WHERE roll_key = v_roll_key
-      AND started_at > (clock_timestamp() - interval '60 minutes')
-    ORDER BY started_at DESC
-    LIMIT 1;
-
-    IF FOUND THEN
-        v_eligible_at := v_last_started + interval '60 minutes';
-        RETURN jsonb_build_object(
-            'success', false,
-            'error_code', 'COOLDOWN',
-            'message', 'You can only take one break per rolling 60 minutes.',
-            'eligible_at', v_eligible_at
-        );
-    END IF;
-
-    -- 6. Generate cryptographic one-time break token (client receives raw token; DB stores SHA-256)
-    v_raw_token := encode(gen_random_bytes(24), 'hex');
-    v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
-
-    -- Calculate timestamps using exact database time
+    -- 8. Compute timestamps (exactly 15-minute fixed duration)
     v_now := clock_timestamp();
     v_expires_at := v_now + interval '15 minutes';
 
-    -- Mark any past un-ended break on this computer as expired in history
-    UPDATE public.break_history
-    SET ended_at = coalesce(ended_at, scheduled_expires_at),
-        end_reason = coalesce(end_reason, 'expired')
-    WHERE computer_id = v_computer.id
-      AND ended_at IS NULL;
+    -- One-time token for localStorage ownership
+    v_raw_token := encode(gen_random_bytes(24), 'hex');
+    v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
 
-    -- Update computer row (public-safe data only)
+    -- 9. Insert into break_history
+    -- Enforced by partial unique index uq_active_break_user and uq_active_break_computer
+    BEGIN
+        INSERT INTO public.break_history (
+            computer_id,
+            user_id,
+            user_email,
+            break_token_hash,
+            started_at,
+            scheduled_expires_at
+        )
+        VALUES (
+            v_computer.id,
+            v_user_id,
+            v_user_email,
+            v_token_hash,
+            v_now,
+            v_expires_at
+        )
+        RETURNING id INTO v_break_id;
+    EXCEPTION WHEN unique_violation THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'RACE_DETECTED',
+            'message', 'Another break was just activated on this computer or by your account.'
+        );
+    END;
+
+    -- 10. Update computer status
     UPDATE public.computers
     SET break_started_at = v_now,
         break_expires_at = v_expires_at,
         updated_at = v_now
     WHERE id = v_computer.id;
 
-    -- Record in private break history
-    INSERT INTO public.break_history (
-        computer_id,
-        roll_key,
-        break_token_hash,
-        started_at,
-        scheduled_expires_at
-    ) VALUES (
-        v_computer.id,
-        v_roll_key,
-        v_token_hash,
-        v_now,
-        v_expires_at
-    )
-    RETURNING id INTO v_break_id;
-
-    -- Return success payload with client-only break token
     RETURN jsonb_build_object(
         'success', true,
-        'computer_id', v_computer.id,
-        'lab_id', p_lab_id,
-        'pc_number', p_pc_number,
+        'break_id', v_break_id,
         'break_token', v_raw_token,
-        'break_started_at', v_now,
-        'break_expires_at', v_expires_at
+        'break_started_at', to_char(v_now, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+        'break_expires_at', to_char(v_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
     );
 END;
 $$;
 
 -- ------------------------------------------------------------------------------
--- 5. END_BREAK: Early Return ("I'm Back") RPC
+-- 5. END_BREAK: Account-Authorized Early Return RPC
 -- ------------------------------------------------------------------------------
--- Allows ending an active break only if the caller presents the matching break_token
--- or the matching roll_number. Cooldown remains active and is NOT refunded.
+-- Allows ending an active break if:
+-- 1. Caller is the authenticated user who initiated the break
+-- 2. Caller is an authorized staff member (is_admin())
+-- 3. Caller presents the private break token saved on this device
+-- Cooldown remains active and is NOT refunded.
 CREATE OR REPLACE FUNCTION public.end_break(
     p_computer_id UUID,
     p_break_token TEXT DEFAULT NULL,
-    p_roll_number TEXT DEFAULT NULL
+    p_roll_number TEXT DEFAULT NULL -- Obsolete parameter preserved for backward-compatibility
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -355,12 +356,11 @@ AS $$
 DECLARE
     v_computer RECORD;
     v_break RECORD;
-    v_token_hash TEXT;
-    v_norm_roll TEXT;
-    v_pepper TEXT;
-    v_roll_key TEXT;
+    v_caller_id UUID;
     v_is_authorized BOOLEAN := false;
 BEGIN
+    v_caller_id := auth.uid();
+
     -- Lock computer row
     SELECT * INTO v_computer
     FROM public.computers
@@ -386,7 +386,7 @@ BEGIN
     FOR UPDATE;
 
     IF NOT FOUND THEN
-        -- Computer might have already expired or was cleared
+        -- Reconcile computer status
         UPDATE public.computers
         SET break_started_at = NULL,
             break_expires_at = NULL,
@@ -395,45 +395,38 @@ BEGIN
 
         RETURN jsonb_build_object(
             'success', true,
-            'message', 'Timer was already blank or expired.'
+            'message', 'No active break was running on this computer.'
         );
     END IF;
 
-    -- Validate ownership: Method A (break token)
-    IF p_break_token IS NOT NULL AND trim(p_break_token) <> '' THEN
-        v_token_hash := encode(digest(trim(p_break_token), 'sha256'), 'hex');
-        IF v_token_hash = v_break.break_token_hash THEN
-            v_is_authorized := true;
-        END IF;
-    END IF;
-
-    -- Validate ownership: Method B (roll number re-entry from new device)
-    IF NOT v_is_authorized AND p_roll_number IS NOT NULL AND trim(p_roll_number) <> '' THEN
-        v_norm_roll := upper(trim(p_roll_number));
-        SELECT value INTO v_pepper FROM public.app_config WHERE key = 'roll_pepper';
-        IF v_pepper IS NOT NULL THEN
-            v_roll_key := encode(hmac(v_norm_roll::bytea, v_pepper::bytea, 'sha256'), 'hex');
-            IF v_roll_key = v_break.roll_key THEN
-                v_is_authorized := true;
-            END IF;
-        END IF;
+    -- Authorization validation:
+    -- 1. Caller is the authenticated student who created the break
+    IF v_caller_id IS NOT NULL AND v_break.user_id IS NOT NULL AND v_caller_id = v_break.user_id THEN
+        v_is_authorized := true;
+    -- 2. Caller is an authorized admin
+    ELSIF public.is_admin() THEN
+        v_is_authorized := true;
+    -- 3. Caller presents the secret break token saved on this device
+    ELSIF p_break_token IS NOT NULL AND v_break.break_token_hash IS NOT NULL AND
+          encode(digest(p_break_token, 'sha256'), 'hex') = v_break.break_token_hash THEN
+        v_is_authorized := true;
     END IF;
 
     IF NOT v_is_authorized THEN
         RETURN jsonb_build_object(
             'success', false,
-            'error_code', 'UNAUTHORIZED_OWNER',
-            'message', 'Invalid break token or roll number. You cannot end another student''s break.'
+            'error_code', 'UNAUTHORIZED',
+            'message', 'You are not authorized to end this break. Only the student who started it or staff can end it.'
         );
     END IF;
 
-    -- Mark break ended in history (early return)
+    -- Terminate active break record (cooldown remains active on started_at)
     UPDATE public.break_history
     SET ended_at = clock_timestamp(),
         end_reason = 'early_return'
     WHERE id = v_break.id;
 
-    -- Blank the computer status
+    -- Reset computer to BLANK
     UPDATE public.computers
     SET break_started_at = NULL,
         break_expires_at = NULL,
@@ -442,13 +435,60 @@ BEGIN
 
     RETURN jsonb_build_object(
         'success', true,
-        'message', 'Welcome back! Break timer ended successfully.'
+        'message', 'Welcome back! Your break timer ended successfully. The computer is now blank.'
     );
 END;
 $$;
 
 -- ------------------------------------------------------------------------------
--- 6. EXPIRE_BREAKS: Cleanup Stale Timers
+-- 6. GET_MY_ACTIVE_BREAK: Fast Active Break Lookup for Authenticated User
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.get_my_active_break()
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, extensions, pg_temp
+AS $$
+DECLARE
+    v_user_id UUID;
+    v_rec RECORD;
+BEGIN
+    v_user_id := auth.uid();
+    IF v_user_id IS NULL THEN
+        RETURN jsonb_build_object('has_active_break', false);
+    END IF;
+
+    SELECT bh.id AS break_id, bh.computer_id, c.pc_number, l.id AS lab_id, l.slug AS lab_slug, l.name AS lab_name,
+           bh.started_at, bh.scheduled_expires_at
+    INTO v_rec
+    FROM public.break_history bh
+    JOIN public.computers c ON c.id = bh.computer_id
+    JOIN public.labs l ON l.id = c.lab_id
+    WHERE bh.user_id = v_user_id
+      AND bh.ended_at IS NULL
+      AND bh.scheduled_expires_at > clock_timestamp();
+
+    IF FOUND THEN
+        RETURN jsonb_build_object(
+            'has_active_break', true,
+            'break_id', v_rec.break_id,
+            'computer_id', v_rec.computer_id,
+            'pc_number', v_rec.pc_number,
+            'lab_id', v_rec.lab_id,
+            'lab_slug', v_rec.lab_slug,
+            'lab_name', v_rec.lab_name,
+            'started_at', to_char(v_rec.started_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            'expires_at', to_char(v_rec.scheduled_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        );
+    ELSE
+        RETURN jsonb_build_object('has_active_break', false);
+    END IF;
+END;
+$$;
+
+-- ------------------------------------------------------------------------------
+-- 7. EXPIRE_BREAKS: Cleanup Stale Timers
 -- ------------------------------------------------------------------------------
 -- Invoked via pg_cron every minute, or automatically by dashboard/admin sweeps.
 -- Ensures computers whose scheduled_expires_at <= now() revert to BLANK.
@@ -461,14 +501,12 @@ AS $$
 DECLARE
     v_cleared_count INTEGER := 0;
 BEGIN
-    -- Mark break_history records as expired
     UPDATE public.break_history
     SET ended_at = scheduled_expires_at,
         end_reason = 'expired'
     WHERE ended_at IS NULL
       AND scheduled_expires_at <= clock_timestamp();
 
-    -- Blank computers whose timer expired
     UPDATE public.computers
     SET break_started_at = NULL,
         break_expires_at = NULL,
@@ -592,7 +630,7 @@ BEGIN
         c.pc_number,
         bh.started_at,
         bh.scheduled_expires_at,
-        substring(bh.roll_key from 1 for 8) || '...' AS roll_key_preview
+        COALESCE(bh.user_email, substring(bh.roll_key from 1 for 8) || '...', 'Student') AS roll_key_preview
     FROM public.break_history bh
     JOIN public.computers c ON c.id = bh.computer_id
     JOIN public.labs l ON l.id = c.lab_id
@@ -699,6 +737,7 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.server_now() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.start_break(UUID, INTEGER, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.end_break(UUID, TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_my_active_break() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.expire_breaks() TO anon, authenticated;
 
 -- Admin execution grants (functions internally enforce is_admin())

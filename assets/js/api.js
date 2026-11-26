@@ -12,34 +12,39 @@ import { CONFIG } from './config.js';
 import { syncServerTime } from './time.js';
 
 let supabaseClient = null;
+let clientPromise = null;
 let realtimeChannel = null;
 
 /**
  * Initializes and returns the singleton Supabase client
+ * Uses eager memoized promise to avoid duplicate initialization overhead
  */
 export async function getSupabase() {
   if (supabaseClient) return supabaseClient;
-
-  // Verify configuration placeholders
-  if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes('YOUR_PROJECT_ID')) {
-    console.warn('Supabase URL is not configured. Please set SUPABASE_URL in config.js.');
-  }
-
-  const { createClient } = await import(CONFIG.SUPABASE_SDK_CDN);
-  supabaseClient = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true
-    },
-    realtime: {
-      params: {
-        eventsPerSecond: 10
+  if (!clientPromise) {
+    clientPromise = (async () => {
+      // Verify configuration placeholders
+      if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes('YOUR_PROJECT_ID')) {
+        console.warn('Supabase URL is not configured. Please set SUPABASE_URL in config.js.');
       }
-    }
-  });
 
-  return supabaseClient;
+      const { createClient } = await import(CONFIG.SUPABASE_SDK_CDN);
+      supabaseClient = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true
+        },
+        realtime: {
+          params: {
+            eventsPerSecond: 10
+          }
+        }
+      });
+      return supabaseClient;
+    })();
+  }
+  return clientPromise;
 }
 
 /**
@@ -96,18 +101,16 @@ export async function fetchComputers(labId) {
 }
 
 /**
- * Start a break on a computer
+ * Start a break on a computer (Authenticated account identity enforced on backend)
  * @param {string} labId
  * @param {number} pcNumber
- * @param {string} rollNumber
- * @returns {Promise<{ success: boolean, break_token?: string, break_expires_at?: string, error_code?: string, message?: string, eligible_at?: string }>}
+ * @returns {Promise<{ success: boolean, break_token?: string, break_expires_at?: string, error_code?: string, message?: string, eligible_at?: string, active_pc_number?: number, active_lab_name?: string }>}
  */
-export async function startBreak(labId, pcNumber, rollNumber) {
+export async function startBreak(labId, pcNumber) {
   const supabase = await getSupabase();
   const { data, error } = await supabase.rpc('start_break', {
     p_lab_id: labId,
-    p_pc_number: parseInt(pcNumber, 10),
-    p_roll_number: rollNumber
+    p_pc_number: parseInt(pcNumber, 10)
   });
 
   if (error) {
@@ -125,14 +128,12 @@ export async function startBreak(labId, pcNumber, rollNumber) {
  * End an active break (Early return / "I'm Back")
  * @param {string} computerId
  * @param {string|null} breakToken
- * @param {string|null} rollNumber
  */
-export async function endBreak(computerId, breakToken = null, rollNumber = null) {
+export async function endBreak(computerId, breakToken = null) {
   const supabase = await getSupabase();
   const { data, error } = await supabase.rpc('end_break', {
     p_computer_id: computerId,
-    p_break_token: breakToken || null,
-    p_roll_number: rollNumber || null
+    p_break_token: breakToken || null
   });
 
   if (error) {
@@ -144,6 +145,20 @@ export async function endBreak(computerId, breakToken = null, rollNumber = null)
   }
 
   return data;
+}
+
+/**
+ * Check if the currently authenticated user has an active break anywhere
+ */
+export async function getMyActiveBreak() {
+  try {
+    const supabase = await getSupabase();
+    const { data, error } = await supabase.rpc('get_my_active_break');
+    if (error) return { has_active_break: false };
+    return data || { has_active_break: false };
+  } catch (err) {
+    return { has_active_break: false };
+  }
 }
 
 /**

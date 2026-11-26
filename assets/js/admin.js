@@ -538,5 +538,8 @@ function setupListeners() {
 }
 
 // Start
+if (window.location.hash && window.location.hash.includes('access_token')) {
+  history.replaceState(null, document.title, window.location.pathname + window.location.search);
+}
 setupListeners();
 checkAuth();
