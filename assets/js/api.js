@@ -193,6 +193,80 @@ export async function unsubscribeFromComputerUpdates() {
 }
 
 // ------------------------------------------------------------------------------
+// AUTHENTICATION API METHODS (STUDENTS & STAFF)
+// ------------------------------------------------------------------------------
+
+/**
+ * Sign in with Google OAuth (Students & Administrators)
+ * @param {string} [returnUrl] - URL to redirect back to after OAuth flow
+ * @param {boolean} [restrictDomain=true] - Restrict account picker to @iisertvm.ac.in
+ */
+export async function signInWithGoogle(returnUrl = null, restrictDomain = true) {
+  const supabase = await getSupabase();
+  const cleanRedirect = returnUrl || (window.location.origin + window.location.pathname);
+  
+  const queryParams = {
+    prompt: 'select_account'
+  };
+  if (restrictDomain) {
+    queryParams.hd = 'iisertvm.ac.in';
+  }
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: cleanRedirect,
+      queryParams
+    }
+  });
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Sign out the currently authenticated user
+ */
+export async function signOut() {
+  const supabase = await getSupabase();
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+/**
+ * Get current session and user object
+ */
+export async function getUserSession() {
+  const supabase = await getSupabase();
+  const { data: { session }, error } = await supabase.auth.getSession();
+  if (error || !session) return null;
+  return session;
+}
+
+/**
+ * Check if the currently authenticated user is an authorized admin
+ */
+export async function isCurrentUserAdmin() {
+  try {
+    const supabase = await getSupabase();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return false;
+    const { data, error } = await supabase.rpc('is_admin');
+    if (error) return false;
+    return !!data;
+  } catch (err) {
+    return false;
+  }
+}
+
+/**
+ * Subscribe to global Auth state changes
+ */
+export async function onAuthStateChange(callback) {
+  const supabase = await getSupabase();
+  return supabase.auth.onAuthStateChange(callback);
+}
+
+// ------------------------------------------------------------------------------
 // ADMIN API METHODS
 // ------------------------------------------------------------------------------
 
@@ -200,16 +274,7 @@ export async function unsubscribeFromComputerUpdates() {
  * Admin Sign In with Google OAuth
  */
 export async function adminSignInWithGoogle() {
-  const supabase = await getSupabase();
-  const cleanRedirect = window.location.origin + window.location.pathname;
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: {
-      redirectTo: cleanRedirect
-    }
-  });
-  if (error) throw error;
-  return data;
+  return signInWithGoogle(window.location.origin + window.location.pathname, false);
 }
 
 /**
@@ -229,9 +294,7 @@ export async function adminSignIn(email, password) {
  * Admin Sign Out
  */
 export async function adminSignOut() {
-  const supabase = await getSupabase();
-  const { error } = await supabase.auth.signOut();
-  if (error) throw error;
+  return signOut();
 }
 
 /**
@@ -255,8 +318,7 @@ export async function getAdminSession() {
  * Listen for Auth state changes
  */
 export async function onAdminAuthStateChange(callback) {
-  const supabase = await getSupabase();
-  return supabase.auth.onAuthStateChange(callback);
+  return onAuthStateChange(callback);
 }
 
 /**

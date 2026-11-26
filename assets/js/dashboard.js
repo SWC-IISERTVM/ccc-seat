@@ -24,7 +24,9 @@ const state = {
   localTokens: {}, // computerId -> { token, expiresAt, labId, pcNumber }
   connectionStatus: 'connecting', // 'live' | 'connecting' | 'offline'
   activeModalPcId: null,
-  deepLinkHandled: false
+  deepLinkHandled: false,
+  currentUser: null,
+  isAdmin: false
 };
 
 // DOM Elements
@@ -32,6 +34,9 @@ const dom = {
   connectionBadge: document.getElementById('connectionBadge'),
   statusText: document.getElementById('statusText'),
   offlineBanner: document.getElementById('offlineBanner'),
+  domainAlert: document.getElementById('domainAlert'),
+  userAuthArea: document.getElementById('userAuthArea'),
+  staffAccessLink: document.getElementById('staffAccessLink'),
   labTabs: document.getElementById('labTabs'),
   pcGrid: document.getElementById('pcGrid'),
   ariaLive: document.getElementById('ariaLive'),
@@ -108,6 +113,168 @@ function updateConnectionUI(status) {
     dom.statusText.textContent = 'Offline';
     dom.offlineBanner.classList.add('is-active');
     document.querySelectorAll('.pc-tile').forEach(tile => tile.classList.add('is-stale'));
+  }
+}
+
+// ------------------------------------------------------------------------------
+// STUDENT & INSTITUTIONAL AUTHENTICATION
+// ------------------------------------------------------------------------------
+
+/**
+ * Extract roll number from student email if matching the institutional pattern
+ * e.g. ims22001@iisertvm.ac.in -> IMS22001
+ */
+function extractRollFromEmail(email) {
+  if (!email) return '';
+  const localPart = email.split('@')[0];
+  if (/^(IMS|MSC|IPHD|PHD)[0-9]{4,6}$/i.test(localPart)) {
+    return localPart.toUpperCase();
+  }
+  return '';
+}
+
+/**
+ * Check active user session and enforce @iisertvm.ac.in restriction
+ */
+async function checkUserAuth() {
+  try {
+    const session = await api.getUserSession();
+    if (session && session.user && session.user.email) {
+      const email = session.user.email.toLowerCase();
+
+      // Check domain restriction: must be @iisertvm.ac.in or an authorized admin
+      if (!email.endsWith('@iisertvm.ac.in')) {
+        const isAdmin = await api.isCurrentUserAdmin();
+        if (!isAdmin) {
+          // Block non-institutional account immediately
+          await api.signOut();
+          state.currentUser = null;
+          state.isAdmin = false;
+          showDomainAlert(`Access restricted: Only @iisertvm.ac.in institutional accounts are permitted. (${session.user.email} signed out)`);
+          renderUserAuthUI();
+          return;
+        }
+      }
+
+      state.currentUser = session.user;
+      state.isAdmin = await api.isCurrentUserAdmin();
+      hideDomainAlert();
+      renderUserAuthUI();
+    } else {
+      state.currentUser = null;
+      state.isAdmin = false;
+      renderUserAuthUI();
+    }
+  } catch (err) {
+    console.warn('Auth check warning:', err);
+    state.currentUser = null;
+    state.isAdmin = false;
+    renderUserAuthUI();
+  }
+}
+
+/**
+ * Display top domain alert banner
+ */
+function showDomainAlert(message) {
+  if (dom.domainAlert) {
+    dom.domainAlert.textContent = message;
+    dom.domainAlert.style.display = 'block';
+    announceAria(message);
+  }
+}
+
+/**
+ * Hide top domain alert banner
+ */
+function hideDomainAlert() {
+  if (dom.domainAlert) {
+    dom.domainAlert.style.display = 'none';
+  }
+}
+
+/**
+ * Render authentication pill or sign-in trigger in header
+ */
+function renderUserAuthUI() {
+  if (!dom.userAuthArea) return;
+
+  if (state.currentUser) {
+    const email = state.currentUser.email;
+    const shortEmail = email.length > 20 ? email.slice(0, 18) + '…' : email;
+    dom.userAuthArea.innerHTML = `
+      <div class="user-pill" title="${email}">
+        <span class="user-pill-email">${shortEmail}</span>
+        <span class="user-pill-tag">Verified</span>
+        <button type="button" id="headerSignOutBtn" class="user-pill-signout" title="Sign Out">Sign Out</button>
+      </div>
+    `;
+    const signOutBtn = document.getElementById('headerSignOutBtn');
+    if (signOutBtn) {
+      signOutBtn.addEventListener('click', handleUserSignOut);
+    }
+  } else {
+    dom.userAuthArea.innerHTML = `
+      <button type="button" id="headerSignInBtn" class="auth-btn-header" title="Sign in with IISER TVM Google account">
+        <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+        </svg>
+        <span>Sign In (@iisertvm)</span>
+      </button>
+    `;
+    const signInBtn = document.getElementById('headerSignInBtn');
+    if (signInBtn) {
+      signInBtn.addEventListener('click', () => handleStudentGoogleSignIn());
+    }
+  }
+
+  // Update staff access portal link based on admin status
+  if (dom.staffAccessLink) {
+    if (state.isAdmin) {
+      dom.staffAccessLink.textContent = 'Staff Portal (Admin)';
+    } else {
+      dom.staffAccessLink.textContent = 'Staff Access';
+    }
+  }
+}
+
+/**
+ * Sign out current student session
+ */
+async function handleUserSignOut() {
+  try {
+    await api.signOut();
+  } catch (err) {
+    console.warn('Sign out error:', err);
+  }
+  state.currentUser = null;
+  state.isAdmin = false;
+  renderUserAuthUI();
+
+  if (state.activeModalPcId) {
+    const pc = state.computers.get(state.activeModalPcId);
+    if (pc) renderModalContent(pc);
+  }
+}
+
+/**
+ * Initiate Google OAuth for students, preserving PC selection deep link
+ */
+async function handleStudentGoogleSignIn(pc = null) {
+  try {
+    let returnUrl = window.location.origin + window.location.pathname;
+    if (pc) {
+      const lab = state.labs.find(l => l.id === pc.lab_id);
+      if (lab) {
+        returnUrl += `?lab=${encodeURIComponent(lab.slug)}&pc=${pc.pc_number}`;
+      }
+    }
+    await api.signInWithGoogle(returnUrl, true);
+  } catch (err) {
+    alert('Sign in error: ' + (err.message || 'Failed to start Google sign in.'));
   }
 }
 
@@ -353,45 +520,88 @@ function renderModalContent(pc) {
 
   if (isExpired) {
     // --------------------------------------------------------------------------
-    // CASE A: PC IS BLANK -> Show Start Break Form
+    // CASE A: PC IS BLANK -> Show Start Break Form (Requires @iisertvm Auth)
     // --------------------------------------------------------------------------
-    dom.modalSubtitle.textContent = 'No active break timer';
-    dom.modalBody.innerHTML = `
-      <div class="info-row">
-        <span class="info-label">Break Duration</span>
-        <span class="info-val">15 Minutes (Fixed)</span>
-      </div>
+    if (!state.currentUser) {
+      // Student is not signed in
+      dom.modalSubtitle.textContent = 'Institutional verification required';
+      dom.modalBody.innerHTML = `
+        <div class="auth-gate-box">
+          <div class="auth-gate-badge">IISER TVM Verification Required</div>
+          <p class="auth-gate-text">
+            To activate a 15-minute break timer and protect your computer, please sign in with your official <strong>@iisertvm.ac.in</strong> Google account.
+          </p>
+          <button type="button" id="modalGoogleSignInBtn" class="btn btn-google">
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+            </svg>
+            Sign In with Google (@iisertvm.ac.in)
+          </button>
+          <div class="form-hint" style="text-align: center; margin-top: 12px;">
+            Access is strictly restricted to students and scholars of IISER Thiruvananthapuram.
+          </div>
+        </div>
+      `;
 
-      <div id="modalError" class="form-error" role="alert"></div>
-
-      <form id="startBreakForm" autocomplete="off">
-        <div class="form-group">
-          <label for="rollNumberInput" class="form-label">College Roll Number</label>
-          <input
-            type="text"
-            id="rollNumberInput"
-            name="rollNumber"
-            class="form-input"
-            placeholder="e.g. IMS22001 or PHD22001"
-            required
-            maxlength="20"
-            autocapitalize="characters"
-            spellcheck="false"
-          />
-          <div class="form-hint">Accepted prefixes: IMS, MSC, IPHD, PHD (e.g. IMS22001). Never shown publicly.</div>
+      const modalSignInBtn = document.getElementById('modalGoogleSignInBtn');
+      if (modalSignInBtn) {
+        modalSignInBtn.addEventListener('click', () => handleStudentGoogleSignIn(pc));
+      }
+    } else {
+      // Student is signed in with @iisertvm.ac.in (or admin)
+      const autoRoll = extractRollFromEmail(state.currentUser.email);
+      dom.modalSubtitle.textContent = 'No active break timer';
+      dom.modalBody.innerHTML = `
+        <div class="student-session-box">
+          <div class="student-session-header">
+            <span class="student-session-label">Verified Student Account</span>
+            <span class="user-pill-tag">IISER TVM</span>
+          </div>
+          <div class="student-session-email">${state.currentUser.email}</div>
         </div>
 
-        <button type="submit" id="startBreakSubmitBtn" class="btn btn-primary">
-          Start 15-Minute Break
-        </button>
-      </form>
-    `;
+        <div class="info-row">
+          <span class="info-label">Break Duration</span>
+          <span class="info-val">15 Minutes (Fixed)</span>
+        </div>
 
-    const form = document.getElementById('startBreakForm');
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      handleStartBreakSubmit(pc);
-    });
+        <div id="modalError" class="form-error" role="alert"></div>
+
+        <form id="startBreakForm" autocomplete="off">
+          <div class="form-group">
+            <label for="rollNumberInput" class="form-label">College Roll Number</label>
+            <input
+              type="text"
+              id="rollNumberInput"
+              name="rollNumber"
+              class="form-input"
+              placeholder="e.g. IMS22001 or PHD22001"
+              value="${autoRoll}"
+              required
+              maxlength="20"
+              autocapitalize="characters"
+              spellcheck="false"
+            />
+            <div class="form-hint">Accepted prefixes: IMS, MSC, IPHD, PHD (e.g. IMS22001). Never shown publicly.</div>
+          </div>
+
+          <button type="submit" id="startBreakSubmitBtn" class="btn btn-primary">
+            Start 15-Minute Break
+          </button>
+        </form>
+      `;
+
+      const form = document.getElementById('startBreakForm');
+      if (form) {
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          handleStartBreakSubmit(pc);
+        });
+      }
+    }
   } else {
     // --------------------------------------------------------------------------
     // CASE B: PC IS ON BREAK -> Show Active Countdown & "I'm Back" Options
@@ -519,6 +729,13 @@ async function handleStartBreakSubmit(pc) {
         renderGrid();
       } else if (res.error_code === 'INVALID_ROLL') {
         showModalError(res.message || 'Invalid roll number format.');
+      } else if (res.error_code === 'AUTH_REQUIRED') {
+        showModalError('Institutional sign-in required. Please sign in with your @iisertvm.ac.in Google account.');
+        state.currentUser = null;
+        renderUserAuthUI();
+        renderModalContent(pc);
+      } else if (res.error_code === 'UNAUTHORIZED_DOMAIN') {
+        showModalError('Access restricted: Only verified @iisertvm.ac.in accounts are permitted.');
       } else if (res.error_code === 'RATE_LIMITED') {
         showModalError('Too many attempts. Please wait a minute before trying again.');
       } else {
@@ -718,8 +935,18 @@ async function init() {
     }
   });
 
-  // Initial time sync
+  // Initial time sync & user verification
   await api.syncDatabaseClock();
+  await checkUserAuth();
+
+  // Listen for auth state changes (OAuth redirects or sign-outs)
+  api.onAuthStateChange(async (event, session) => {
+    await checkUserAuth();
+    if (state.activeModalPcId) {
+      const pc = state.computers.get(state.activeModalPcId);
+      if (pc) renderModalContent(pc);
+    }
+  });
 
   // Load labs
   try {

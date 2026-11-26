@@ -54,26 +54,22 @@ CREATE POLICY "Public can view computers"
     TO anon, authenticated
     USING (true);
 
--- ADMIN_USERS: Authenticated users can verify if their own auth.uid() is an admin
+-- ADMIN_USERS: Authenticated users can verify if their own auth.uid() or email is an admin
 DROP POLICY IF EXISTS "Users can check their own admin status" ON public.admin_users;
 CREATE POLICY "Users can check their own admin status"
     ON public.admin_users
     FOR SELECT
     TO authenticated
-    USING ((SELECT auth.uid()) = user_id);
+    USING ((SELECT auth.uid()) = user_id OR lower(email) = lower((auth.jwt()->>'email')));
 
 -- ADMIN_ACTIONS: Authenticated admins can view the action log
 DROP POLICY IF EXISTS "Admins can view action logs" ON public.admin_actions;
-CREATE POLICY "Admins can view action logs"
+DROP POLICY IF EXISTS "Admins can view audit log" ON public.admin_actions;
+CREATE POLICY "Admins can view audit log"
     ON public.admin_actions
     FOR SELECT
     TO authenticated
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.admin_users
-            WHERE admin_users.user_id = (SELECT auth.uid())
-        )
-    );
+    USING (public.is_admin());
 
 -- PRIVATE TABLES (app_config, break_history, request_log):
 -- Intentionally NO POLICIES exist for anon or authenticated roles.

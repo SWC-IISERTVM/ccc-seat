@@ -517,6 +517,23 @@ function setupListeners() {
   dom.cancelClearBtn.addEventListener('click', closeClearModal);
   dom.confirmClearBtn.addEventListener('click', handleConfirmClear);
 
+  // Handle auth state changes from Google OAuth redirect or sign out
+  api.onAdminAuthStateChange(async (event, session) => {
+    if (session) {
+      const adminSession = await api.getAdminSession();
+      if (adminSession) {
+        state.session = adminSession;
+        showDashboard();
+      } else {
+        dom.loginError.textContent = `Access denied: ${session.user.email} is not registered as an authorized administrator.`;
+        dom.loginError.classList.add('is-visible');
+        showLogin();
+      }
+    } else {
+      showLogin();
+    }
+  });
+
   setInterval(tickAdminCountdowns, 1000);
 }
 

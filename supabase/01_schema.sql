@@ -80,8 +80,9 @@ CREATE INDEX IF NOT EXISTS idx_break_history_retention ON public.break_history (
 -- 6. PRIVATE ADMIN_USERS Table
 -- Maps authorized Supabase Auth users to the admin role.
 CREATE TABLE IF NOT EXISTS public.admin_users (
-    user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    email TEXT,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

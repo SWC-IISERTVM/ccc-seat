@@ -28,13 +28,19 @@
           <span class="status-dot"></span>
           <span id="statusText">Connecting...</span>
         </div>
-        <a href="./admin.html" class="admin-link">Staff Access</a>
+        <div id="userAuthArea" class="user-auth-area">
+          <!-- Dynamic Auth State rendered by dashboard.js -->
+        </div>
+        <a href="./admin.html" id="staffAccessLink" class="admin-link">Staff Access</a>
       </div>
     </div>
   </header>
 
   <!-- Main Container -->
   <main class="container">
+
+    <!-- Domain Restriction / Security Alert Banner -->
+    <div id="domainAlert" class="banner-domain-alert" role="alert" style="display: none;"></div>
 
     <!-- Offline Warning Banner -->
     <div id="offlineBanner" class="banner-offline" role="alert">

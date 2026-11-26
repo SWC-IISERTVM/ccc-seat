@@ -33,15 +33,43 @@ AS $$
 DECLARE
     v_email TEXT;
 BEGIN
+    IF auth.uid() IS NULL THEN
+        RETURN FALSE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM public.admin_users WHERE user_id = auth.uid()) THEN
+        RETURN TRUE;
+    END IF;
+
     v_email := lower(coalesce(auth.jwt()->>'email', ''));
-    RETURN EXISTS (
-        SELECT 1
-        FROM public.admin_users
-        WHERE user_id = auth.uid()
-           OR (v_email <> '' AND lower(email) = v_email)
-    );
+    IF v_email <> '' AND EXISTS (
+        SELECT 1 FROM public.admin_users WHERE lower(email) = v_email
+    ) THEN
+        RETURN TRUE;
+    END IF;
+
+    RETURN FALSE;
 END;
 $$;
+
+-- Trigger to link user_id when user signs in with Google OAuth
+CREATE OR REPLACE FUNCTION public.sync_admin_user_on_auth()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.email IS NOT NULL THEN
+    UPDATE public.admin_users
+    SET user_id = NEW.id
+    WHERE lower(email) = lower(NEW.email) AND (user_id IS NULL OR user_id <> NEW.id);
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions, pg_temp;
+
+DROP TRIGGER IF EXISTS tr_sync_admin_user ON auth.users;
+CREATE TRIGGER tr_sync_admin_user
+  AFTER INSERT OR UPDATE OF email ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.sync_admin_user_on_auth();
 
 -- ------------------------------------------------------------------------------
 -- 3. CHECK_RATE_LIMIT: Internal Helper for Best-Effort Abuse Prevention
@@ -131,7 +159,26 @@ DECLARE
     v_expires_at TIMESTAMPTZ;
     v_break_id UUID;
     v_rate_ok BOOLEAN;
+    v_user_email TEXT;
 BEGIN
+    -- 0. Institutional domain verification (@iisertvm.ac.in)
+    IF auth.uid() IS NULL THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'AUTH_REQUIRED',
+            'message', 'Institutional sign-in required. Please sign in with your @iisertvm.ac.in Google account.'
+        );
+    END IF;
+
+    v_user_email := lower(coalesce(auth.jwt()->>'email', ''));
+    IF v_user_email NOT LIKE '%@iisertvm.ac.in' AND NOT public.is_admin() THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'UNAUTHORIZED_DOMAIN',
+            'message', 'Access restricted: Only verified @iisertvm.ac.in accounts are permitted.'
+        );
+    END IF;
+
     -- 1. Extract best-effort IP header from PostgREST environment
     BEGIN
         v_ip_header := current_setting('request.headers', true)::json->>'x-forwarded-for';

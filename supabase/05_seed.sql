@@ -50,3 +50,8 @@ BEGIN
         ON CONFLICT (lab_id, pc_number) DO NOTHING;
     END LOOP;
 END $$;
+
+-- 4. SEED INITIAL ADMINISTRATORS
+INSERT INTO public.admin_users (email)
+VALUES ('shrayansh23@iisertvm.ac.in')
+ON CONFLICT (email) DO NOTHING;
