@@ -10,7 +10,7 @@
 export const CONFIG = {
   // Supabase Project Settings (Replace with your project details from Supabase Dashboard -> Settings -> API)
   SUPABASE_URL: 'https://onofshoylvogapvzahyx.supabase.co',
-  SUPABASE_ANON_KEY: 'YOUR_SUPABASE_ANON_KEY', // Copy the 'anon' / 'publishable' key from Supabase Dashboard -> Settings -> API
+  SUPABASE_ANON_KEY: 'sb_publishable_-xn_St3BrG2F8_NNb7Nexg_RUyti_Cj',
 
   // Pinned CDN Libraries (ES modules loaded directly in browser)
   SUPABASE_SDK_CDN: 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.48.1/+esm',
