@@ -15,7 +15,7 @@ RETURNS TIMESTAMPTZ
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
     SELECT clock_timestamp();
 $$;
@@ -28,7 +28,7 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
     RETURN EXISTS (
@@ -50,7 +50,7 @@ CREATE OR REPLACE FUNCTION public.check_rate_limit(
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_ip_count INTEGER := 0;
@@ -109,7 +109,7 @@ CREATE OR REPLACE FUNCTION public.start_break(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_norm_roll TEXT;
@@ -176,7 +176,7 @@ BEGIN
     END IF;
 
     -- Compute HMAC-SHA256 roll key
-    v_roll_key := encode(hmac(v_norm_roll, v_pepper, 'sha256'), 'hex');
+    v_roll_key := encode(hmac(v_norm_roll::bytea, v_pepper::bytea, 'sha256'), 'hex');
 
     -- Best-effort rate limiting
     v_rate_ok := public.check_rate_limit(v_ip_hash, v_roll_key, 'start_break');
@@ -299,7 +299,7 @@ CREATE OR REPLACE FUNCTION public.end_break(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_computer RECORD;
@@ -361,7 +361,7 @@ BEGIN
         v_norm_roll := upper(trim(p_roll_number));
         SELECT value INTO v_pepper FROM public.app_config WHERE key = 'roll_pepper';
         IF v_pepper IS NOT NULL THEN
-            v_roll_key := encode(hmac(v_norm_roll, v_pepper, 'sha256'), 'hex');
+            v_roll_key := encode(hmac(v_norm_roll::bytea, v_pepper::bytea, 'sha256'), 'hex');
             IF v_roll_key = v_break.roll_key THEN
                 v_is_authorized := true;
             END IF;
@@ -405,7 +405,7 @@ CREATE OR REPLACE FUNCTION public.expire_breaks()
 RETURNS INTEGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_cleared_count INTEGER := 0;
@@ -442,7 +442,7 @@ CREATE OR REPLACE FUNCTION public.admin_clear_break(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_computer RECORD;
@@ -525,7 +525,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 BEGIN
     IF NOT public.is_admin() THEN
@@ -560,7 +560,7 @@ CREATE OR REPLACE FUNCTION public.admin_manage_computer(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_computer_id UUID;
@@ -600,7 +600,7 @@ CREATE OR REPLACE FUNCTION public.cleanup_old_records()
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+SET search_path = public, extensions, pg_temp
 AS $$
 DECLARE
     v_retention_days INTEGER := 7;
@@ -617,7 +617,7 @@ BEGIN
             v_retention_days := v_config_val::integer;
         EXCEPTION WHEN OTHERS THEN
             v_retention_days := 7;
-        END IF;
+        END;
     END IF;
 
     -- Delete old break history past retention period

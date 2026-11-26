@@ -25,6 +25,7 @@ DECLARE
     v_total_count INTEGER := 0;
     v_computer_row RECORD;
 BEGIN
+    PERFORM set_config('search_path', 'public, extensions, pg_temp', true);
     RAISE NOTICE '=== STARTING COMPUTER LAB BREAK TIMER TEST SUITE ===';
 
     -- 0. Setup isolated test lab and computers
@@ -44,7 +45,7 @@ BEGIN
     -- Clear any history for test rolls
     DELETE FROM public.break_history
     WHERE roll_key IN (
-        SELECT encode(hmac(upper(r), (SELECT value FROM public.app_config WHERE key = 'roll_pepper'), 'sha256'), 'hex')
+        SELECT encode(hmac(upper(r)::bytea, (SELECT value FROM public.app_config WHERE key = 'roll_pepper')::bytea, 'sha256'), 'hex')
         FROM unnest(ARRAY[v_roll_alice, v_roll_bob]) AS r
     );
 
