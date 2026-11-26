@@ -372,13 +372,13 @@ function renderModalContent(pc) {
             id="rollNumberInput"
             name="rollNumber"
             class="form-input"
-            placeholder="e.g. 21CS101"
+            placeholder="e.g. IMS22001 or PHD22001"
             required
             maxlength="20"
             autocapitalize="characters"
             spellcheck="false"
           />
-          <div class="form-hint">Used only to enforce the rolling 60-minute cooldown. Never shown publicly.</div>
+          <div class="form-hint">Accepted prefixes: IMS, MSC, IPHD, PHD (e.g. IMS22001). Never shown publicly.</div>
         </div>
 
         <button type="submit" id="startBreakSubmitBtn" class="btn btn-primary">

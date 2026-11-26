@@ -40,6 +40,8 @@ All business rules are strictly enforced within atomic PostgreSQL transactions (
 ## 4. Privacy & Security Model
 
 - **Public-Safe Schema**: The `computers` table exposed to the public dashboard contains only `id`, `lab_id`, `pc_number`, `break_started_at`, and `break_expires_at`.
+- **Supported Labs**: CCC (151 computers) and IDC (100 computers).
+- **Roll Number Format**: Enforced via regex `^(IMS|MSC|IPHD|PHD)[0-9]{4,6}$` (e.g. `IMS22001`, `MSC22001`, `IPHD22001`, `PHD22001`).
 - **Peppered HMAC Roll Keys**: Raw student roll numbers are never saved to persistent storage. The database stores only HMAC-SHA256 digests generated with a secret high-entropy pepper stored in a private `app_config` table.
 - **Hashed Break Tokens**: The client receives a random 24-byte break token in memory and local storage. Only its SHA-256 digest is stored in `break_history`.
 - **Zero Direct Writes**: Anonymous users have zero direct INSERT, UPDATE, or DELETE privileges on any table. All actions occur through `SECURITY DEFINER` stored procedures with explicit `search_path = public, pg_temp`.
