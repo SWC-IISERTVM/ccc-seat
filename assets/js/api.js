@@ -17,31 +17,45 @@ let realtimeChannel = null;
 
 /**
  * Initializes and returns the singleton Supabase client
- * Uses eager memoized promise to avoid duplicate initialization overhead
+ * Uses eager memoized promise with automatic CDN fallback and retry capability
  */
 export async function getSupabase() {
   if (supabaseClient) return supabaseClient;
   if (!clientPromise) {
     clientPromise = (async () => {
-      // Verify configuration placeholders
-      if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes('YOUR_PROJECT_ID')) {
-        console.warn('Supabase URL is not configured. Please set SUPABASE_URL in config.js.');
-      }
-
-      const { createClient } = await import(CONFIG.SUPABASE_SDK_CDN);
-      supabaseClient = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true
-        },
-        realtime: {
-          params: {
-            eventsPerSecond: 10
-          }
+      try {
+        if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes('YOUR_PROJECT_ID')) {
+          console.warn('Supabase URL is not configured. Please set SUPABASE_URL in config.js.');
         }
-      });
-      return supabaseClient;
+
+        let module;
+        try {
+          module = await import(CONFIG.SUPABASE_SDK_CDN);
+        } catch (primaryCdnErr) {
+          console.warn('Primary Supabase CDN unreachable, falling back to secondary CDN:', primaryCdnErr.message);
+          module = await import('https://esm.sh/@supabase/supabase-js@2.48.1');
+        }
+
+        const { createClient } = module;
+        supabaseClient = createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true
+          },
+          realtime: {
+            params: {
+              eventsPerSecond: 10
+            }
+          }
+        });
+        return supabaseClient;
+      } catch (err) {
+        // Reset clientPromise on failure so future calls or retries can re-attempt initialization
+        clientPromise = null;
+        console.error('Failed to initialize Supabase client:', err);
+        throw err;
+      }
     })();
   }
   return clientPromise;
@@ -66,38 +80,58 @@ export async function syncDatabaseClock() {
 }
 
 /**
- * Fetch all active labs
+ * Fetch all active labs with automatic single retry
  */
 export async function fetchLabs() {
-  const supabase = await getSupabase();
-  const { data, error } = await supabase
-    .from('labs')
-    .select('id, slug, name, display_order')
-    .eq('is_active', true)
-    .order('display_order', { ascending: true });
+  const executeQuery = async () => {
+    const supabase = await getSupabase();
+    const { data, error } = await supabase
+      .from('labs')
+      .select('id, slug, name, display_order')
+      .eq('is_active', true)
+      .order('display_order', { ascending: true });
 
-  if (error) throw error;
-  return data || [];
+    if (error) throw error;
+    return data || [];
+  };
+
+  try {
+    return await executeQuery();
+  } catch (err) {
+    console.warn('fetchLabs failed, retrying once...', err.message);
+    await new Promise(r => setTimeout(r, 800));
+    return await executeQuery();
+  }
 }
 
 /**
- * Fetch computers for a given lab (public-safe data only)
+ * Fetch computers for a given lab with automatic single retry (public-safe data only)
  * @param {string} labId
  */
 export async function fetchComputers(labId) {
-  const supabase = await getSupabase();
-  let query = supabase
-    .from('computers')
-    .select('id, lab_id, pc_number, break_started_at, break_expires_at, updated_at')
-    .order('pc_number', { ascending: true });
+  const executeQuery = async () => {
+    const supabase = await getSupabase();
+    let query = supabase
+      .from('computers')
+      .select('id, lab_id, pc_number, break_started_at, break_expires_at, updated_at')
+      .order('pc_number', { ascending: true });
 
-  if (labId) {
-    query = query.eq('lab_id', labId);
+    if (labId) {
+      query = query.eq('lab_id', labId);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  };
+
+  try {
+    return await executeQuery();
+  } catch (err) {
+    console.warn(`fetchComputers for lab ${labId} failed, retrying once...`, err.message);
+    await new Promise(r => setTimeout(r, 800));
+    return await executeQuery();
   }
-
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
 }
 
 /**
@@ -167,34 +201,46 @@ export async function getMyActiveBreak() {
  * @param {function} onStatusChange - Callback with connection status ('SUBSCRIBED', 'CLOSED', 'CHANNEL_ERROR')
  */
 export async function subscribeToComputerUpdates(onComputerChange, onStatusChange) {
-  const supabase = await getSupabase();
+  try {
+    const supabase = await getSupabase();
 
-  if (realtimeChannel) {
-    await supabase.removeChannel(realtimeChannel);
-  }
+    if (realtimeChannel) {
+      try {
+        await supabase.removeChannel(realtimeChannel);
+      } catch (removeErr) {
+        console.warn('Channel remove warning:', removeErr);
+      }
+    }
 
-  realtimeChannel = supabase
-    .channel('public:computers')
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'computers'
-      },
-      (payload) => {
-        if (onComputerChange) {
-          onComputerChange(payload);
+    realtimeChannel = supabase
+      .channel('public:computers')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'computers'
+        },
+        (payload) => {
+          if (onComputerChange) {
+            onComputerChange(payload);
+          }
         }
-      }
-    )
-    .subscribe((status, err) => {
-      if (onStatusChange) {
-        onStatusChange(status, err);
-      }
-    });
+      )
+      .subscribe((status, err) => {
+        if (onStatusChange) {
+          onStatusChange(status, err);
+        }
+      });
 
-  return realtimeChannel;
+    return realtimeChannel;
+  } catch (err) {
+    console.warn('Realtime subscription initialization error:', err);
+    if (onStatusChange) {
+      onStatusChange('CHANNEL_ERROR', err);
+    }
+    return null;
+  }
 }
 
 /**

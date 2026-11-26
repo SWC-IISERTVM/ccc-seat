@@ -254,3 +254,28 @@ git push origin main
 - [x] Return to active PC and click "I'm Back (End Break Early)" &rarr; Verify PC reverts to blank immediately
 - [x] Attempt to start another break &rarr; Verify 60-minute cooldown alert is shown
 - [x] Open `admin.html` as administrator &rarr; Verify active break list and audit logs render properly
+
+---
+
+## 9. Database Synchronization & Connection Resilience Hardening
+
+### 9.1 Root Cause of False "[OFFLINE]" Warnings
+Investigation revealed that the warning `[OFFLINE] Unable to synchronize with database` was erroneously triggered when Supabase Realtime WebSocket connections closed, timed out, or encountered transient network state shifts:
+
+1. **Coupling WebSocket Disconnects to Database Health:** The subscription callback treated WebSocket lifecycle events (`CLOSED`, `TIMED_OUT`, `CHANNEL_ERROR`) as complete database synchronization failures, triggering `updateConnectionUI('offline')`. In mobile browsers, backgrounded tabs, or campus Wi-Fi networks with idle WebSocket termination, this triggered a false-positive red offline banner even though the REST API and polling fallbacks were 100% operational.
+2. **Missing Fallback for Lab Metadata:** In the event of cold network initialization, if `fetchLabs()` experienced a transient network glitch, `selectedLabId` remained unset, preventing initial workstation loading and polling.
+3. **Single CDN Dependency:** Reliance on a single CDN endpoint for `@supabase/supabase-js` posed a single point of failure during CDN hiccups.
+
+### 9.2 Implemented Architectural Fixes
+1. **Decoupled WebSocket Transport from Offline State:**
+   - Realtime WebSockets are treated as an optional fast-path push layer.
+   - If WebSockets drop, the UI stays **Live** and transparently falls back to resilient 10-second HTTP polling.
+   - The offline warning is restricted strictly to cases where the browser is genuinely offline (`navigator.onLine === false`) or repeated consecutive HTTP requests fail for >90 seconds.
+2. **Exponential Backoff Auto-Reconnection:**
+   - Implemented an automatic reconnection manager (`setupRealtimeSubscription()`) that attempts re-subscription with exponential backoff whenever a WebSocket closes.
+   - Automatically reconnects on `visibilitychange` (when the student re-opens the tab/phone) and on the `online` window event.
+3. **Resilient Static Lab Fallback:**
+   - Built-in resilient fallbacks for CCC and IDC guarantee that lab tabs and workstations render with zero latency, even during DNS cold-starts.
+4. **Dual-CDN Failover & Client Promise Reset:**
+   - `getSupabase()` now includes automatic fallback from jsDelivr to esm.sh.
+   - Resets the client promise on initialization errors so future requests can retry rather than permanently caching a failure.

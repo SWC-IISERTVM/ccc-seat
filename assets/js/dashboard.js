@@ -16,13 +16,22 @@ import { CONFIG } from './config.js';
 import * as api from './api.js';
 import * as time from './time.js';
 
+// Static resilient default labs (guarantees UI never breaks even during cold network/DNS startup)
+const DEFAULT_LABS = [
+  { id: 'a0000000-0000-0000-0000-000000000001', slug: 'ccc', name: 'CCC', display_order: 1 },
+  { id: 'a0000000-0000-0000-0000-000000000002', slug: 'idc', name: 'IDC', display_order: 2 }
+];
+
 // Application state
 const state = {
-  labs: [],
-  selectedLabId: null,
+  labs: [...DEFAULT_LABS],
+  selectedLabId: DEFAULT_LABS[0].id,
   computers: new Map(), // computerId -> row
   localTokens: {}, // computerId -> { token, expiresAt, labId, pcNumber }
   connectionStatus: 'connecting', // 'live' | 'connecting' | 'offline'
+  isRealtimeConnected: false,
+  lastSuccessfulSync: 0,
+  consecutiveSyncFailures: 0,
   activeModalPcId: null,
   deepLinkHandled: false,
   currentUser: null,
@@ -95,25 +104,36 @@ function saveLocalTokens() {
 
 /**
  * Update connection indicator in UI
+ * Resilient multi-tier logic:
+ * - Online/Live as long as HTTP sync is healthy or Realtime is connected
+ * - NEVER flags offline merely because an ephemeral WebSocket disconnected
+ * - Shows offline warning ONLY when device has no network or repeated HTTP syncs fail for >90s
  */
-function updateConnectionUI(status) {
-  state.connectionStatus = status;
+function updateConnectionUI(overrideStatus = null) {
   if (!dom.connectionBadge) return;
+
+  const isBrowserOnline = typeof navigator.onLine === 'boolean' ? navigator.onLine : true;
+  const hasRecentSync = state.lastSuccessfulSync > 0 && (Date.now() - state.lastSuccessfulSync) < 90000;
+  const isHardFailure = !isBrowserOnline || (state.consecutiveSyncFailures >= 3 && !hasRecentSync);
 
   dom.connectionBadge.className = 'connection-badge';
 
-  if (status === 'live') {
-    dom.statusText.textContent = 'Live';
-    dom.offlineBanner.classList.remove('is-active');
-    document.querySelectorAll('.pc-tile').forEach(tile => tile.classList.remove('is-stale'));
-  } else if (status === 'connecting') {
+  if (overrideStatus === 'connecting' || (state.lastSuccessfulSync === 0 && !isHardFailure)) {
+    state.connectionStatus = 'connecting';
     dom.connectionBadge.classList.add('is-connecting');
     dom.statusText.textContent = 'Connecting...';
-  } else {
+    if (dom.offlineBanner) dom.offlineBanner.classList.remove('is-active');
+  } else if (isHardFailure) {
+    state.connectionStatus = 'offline';
     dom.connectionBadge.classList.add('is-offline');
     dom.statusText.textContent = 'Offline';
-    dom.offlineBanner.classList.add('is-active');
+    if (dom.offlineBanner) dom.offlineBanner.classList.add('is-active');
     document.querySelectorAll('.pc-tile').forEach(tile => tile.classList.add('is-stale'));
+  } else {
+    state.connectionStatus = 'live';
+    dom.statusText.textContent = 'Live';
+    if (dom.offlineBanner) dom.offlineBanner.classList.remove('is-active');
+    document.querySelectorAll('.pc-tile').forEach(tile => tile.classList.remove('is-stale'));
   }
 }
 
@@ -358,16 +378,22 @@ function renderGridLoading() {
  * Fetch computers for currently selected lab
  */
 async function loadComputersForLab(labId) {
+  const targetLabId = labId || state.selectedLabId;
+  if (!targetLabId) return;
+
   try {
-    const list = await api.fetchComputers(labId);
+    const list = await api.fetchComputers(targetLabId);
     state.computers.clear();
     list.forEach(pc => {
       state.computers.set(pc.id, pc);
     });
-    updateConnectionUI('live');
+    state.lastSuccessfulSync = Date.now();
+    state.consecutiveSyncFailures = 0;
+    updateConnectionUI();
   } catch (err) {
-    console.error('Failed to load computers:', err);
-    updateConnectionUI('offline');
+    console.warn(`Sync warning for lab ${targetLabId}:`, err);
+    state.consecutiveSyncFailures += 1;
+    updateConnectionUI();
   }
 }
 
@@ -965,16 +991,18 @@ async function init() {
 
   // Re-sync on network reconnect & visibility change
   window.addEventListener('online', async () => {
+    state.consecutiveSyncFailures = 0;
     updateConnectionUI('connecting');
     await api.syncDatabaseClock();
     if (state.selectedLabId) {
       await loadComputersForLab(state.selectedLabId);
       renderGrid();
     }
+    setupRealtimeSubscription();
   });
 
   window.addEventListener('offline', () => {
-    updateConnectionUI('offline');
+    updateConnectionUI();
   });
 
   document.addEventListener('visibilitychange', async () => {
@@ -983,6 +1011,9 @@ async function init() {
       if (state.selectedLabId) {
         await loadComputersForLab(state.selectedLabId);
         renderGrid();
+      }
+      if (!state.isRealtimeConnected) {
+        setupRealtimeSubscription();
       }
     }
   });
@@ -1004,6 +1035,9 @@ async function init() {
     }
   });
 
+  // Pre-render lab tabs from default labs so UI is instantly populated
+  renderLabTabs();
+
   // Parallel initial data load (eliminates serial waterfalls!)
   try {
     const [clockRes, sessionRes, labsRes] = await Promise.allSettled([
@@ -1021,37 +1055,30 @@ async function init() {
 
     if (labsRes.status === 'fulfilled' && labsRes.value && labsRes.value.length > 0) {
       state.labs = labsRes.value;
-      state.selectedLabId = state.labs[0].id;
-      renderLabTabs();
-      await loadComputersForLab(state.selectedLabId);
-      renderGrid();
-      handleDeepLink();
-    } else {
-      if (dom.pcGrid) {
-        dom.pcGrid.innerHTML = '<div class="grid-placeholder">No computer labs are active.</div>';
+      if (!state.labs.some(l => l.id === state.selectedLabId)) {
+        state.selectedLabId = state.labs[0].id;
       }
+      renderLabTabs();
     }
+
+    // Load computers for active lab
+    await loadComputersForLab(state.selectedLabId);
+    renderGrid();
+    handleDeepLink();
   } catch (err) {
-    console.error('Initialization error:', err);
-    updateConnectionUI('offline');
+    console.warn('Initialization warning:', err);
+    state.consecutiveSyncFailures += 1;
+    updateConnectionUI();
   }
 
-  // Setup Realtime Subscription
-  api.subscribeToComputerUpdates(
-    (payload) => handleRealtimeChange(payload),
-    (status) => {
-      if (status === 'SUBSCRIBED') {
-        updateConnectionUI('live');
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        updateConnectionUI('offline');
-      }
-    }
-  );
+  // Setup auto-reconnecting Realtime Subscription
+  setupRealtimeSubscription();
 
   // Setup 1000ms ticker for live tabular-num countdowns
   setInterval(tickCountdowns, 1000);
 
-  // Setup 30-second polling fallback & time sync
+  // Setup resilient polling fallback & time sync (every 10 seconds)
+  // Ensures workstations are always synchronized even if WebSockets are restricted by firewall/adblocker
   setInterval(async () => {
     await api.syncDatabaseClock();
     if (state.selectedLabId) {
@@ -1066,7 +1093,46 @@ async function init() {
       saveLocalTokens();
       renderGrid();
     }
-  }, CONFIG.POLL_INTERVAL_MS);
+  }, 10000);
+}
+
+let realtimeReconnectTimer = null;
+let realtimeReconnectDelay = 2000;
+
+/**
+ * Setup and manage auto-reconnecting Realtime subscription
+ */
+function setupRealtimeSubscription() {
+  if (realtimeReconnectTimer) {
+    clearTimeout(realtimeReconnectTimer);
+    realtimeReconnectTimer = null;
+  }
+
+  api.subscribeToComputerUpdates(
+    (payload) => handleRealtimeChange(payload),
+    (status) => {
+      if (status === 'SUBSCRIBED') {
+        state.isRealtimeConnected = true;
+        realtimeReconnectDelay = 2000; // Reset backoff
+        updateConnectionUI();
+      } else {
+        // Realtime disconnected, timed out, or closed:
+        // DO NOT mark the app as offline! HTTP polling continues seamlessly.
+        state.isRealtimeConnected = false;
+        updateConnectionUI();
+
+        // Schedule auto-reconnect with exponential backoff if device is online
+        if (!realtimeReconnectTimer && (typeof navigator.onLine !== 'boolean' || navigator.onLine)) {
+          const delay = Math.min(realtimeReconnectDelay, 30000);
+          realtimeReconnectDelay = Math.min(realtimeReconnectDelay * 1.5, 30000);
+          realtimeReconnectTimer = setTimeout(() => {
+            realtimeReconnectTimer = null;
+            setupRealtimeSubscription();
+          }, delay);
+        }
+      }
+    }
+  );
 }
 
 // Start application when DOM is ready
