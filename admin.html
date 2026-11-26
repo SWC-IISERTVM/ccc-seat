@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Portal - Computer Lab Break-Timer</title>
+  <link rel="stylesheet" href="./assets/css/styles.css">
+</head>
+<body>
+
+  <!-- Screen reader live region -->
+  <div id="ariaLiveAdmin" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Header -->
+  <header class="site-header no-print">
+    <div class="header-inner">
+      <h1 class="site-title">
+        <a href="./index.html">Computer Lab Break-Timer</a>
+        <span style="font-weight: 400; color: var(--text-secondary); margin-left: 8px;">/ Staff Portal</span>
+      </h1>
+      <div class="header-meta">
+        <a href="./index.html" class="admin-link">View Public Dashboard</a>
+        <button id="adminSignOutBtn" type="button" class="btn btn-outline" style="display: none; padding: 4px 10px; font-size: 12px; width: auto;">Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Auth Login Form (Shown when not logged in) -->
+    <div id="adminAuthSection" style="max-width: 380px; margin: 48px auto 0;">
+      <div class="admin-card">
+        <h2 style="font-size: 17px; font-weight: 600; margin-bottom: 6px;">Staff Sign In</h2>
+        <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 20px;">
+          Authorized lab administrators only. Public signups are disabled.
+        </p>
+
+        <div id="loginError" class="form-error" role="alert"></div>
+
+        <form id="adminLoginForm">
+          <div class="form-group">
+            <label for="adminEmail" class="form-label">Email</label>
+            <input type="email" id="adminEmail" class="form-input" required autocomplete="email" style="text-transform: none;">
+          </div>
+          <div class="form-group">
+            <label for="adminPassword" class="form-label">Password</label>
+            <input type="password" id="adminPassword" class="form-input" required autocomplete="current-password" style="text-transform: none;">
+          </div>
+          <button type="submit" id="adminLoginBtn" class="btn btn-primary" style="margin-top: 8px;">
+            Sign In
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Admin Dashboard (Shown when logged in) -->
+    <div id="adminDashboardSection" style="display: none;">
+
+      <!-- Nav Tabs -->
+      <div class="dashboard-controls no-print" style="margin-top: 8px;">
+        <div class="lab-tabs" role="tablist">
+          <button type="button" id="tabBtnBreaks" class="tab-btn is-active" role="tab">Active Breaks</button>
+          <button type="button" id="tabBtnQR" class="tab-btn" role="tab">Print QR Sheets</button>
+          <button type="button" id="tabBtnInventory" class="tab-btn" role="tab">Inventory</button>
+          <button type="button" id="tabBtnAudit" class="tab-btn" role="tab">Audit Log</button>
+        </div>
+      </div>
+
+      <!-- TAB 1: Active Breaks -->
+      <section id="panelBreaks" class="admin-card">
+        <div class="admin-card-header no-print">
+          <h2>Active Break Timers</h2>
+          <button type="button" id="refreshBreaksBtn" class="btn btn-outline" style="width: auto; padding: 4px 10px; font-size: 12px;">Refresh</button>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Lab</th>
+                <th>PC</th>
+                <th>Started At</th>
+                <th>Remaining</th>
+                <th>Roll Mask</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="activeBreaksTbody">
+              <tr>
+                <td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 24px;">Loading active breaks...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 2: Printable QR Sheets -->
+      <section id="panelQR" class="admin-card" style="display: none;">
+        <div class="admin-card-header no-print">
+          <div>
+            <h2>Physical QR Code Sheets</h2>
+            <p style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+              Print and tape to each computer desk. Scanning opens that computer's break timer.
+            </p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <select id="qrLabSelect" class="form-input" style="width: auto; padding: 4px 8px; font-size: 12px; text-transform: none;">
+              <!-- Populated dynamically -->
+            </select>
+            <button type="button" id="printQRBtn" class="btn btn-primary" style="width: auto; padding: 4px 14px; font-size: 12px;">Print Sheet</button>
+          </div>
+        </div>
+
+        <div id="qrCardsContainer" class="qr-print-grid">
+          <!-- Rendered dynamically -->
+        </div>
+      </section>
+
+      <!-- TAB 3: Inventory Management -->
+      <section id="panelInventory" class="admin-card" style="display: none;">
+        <div class="admin-card-header no-print">
+          <h2>Computer Inventory</h2>
+          <div style="display: flex; gap: 8px;">
+            <select id="inventoryLabSelect" class="form-input" style="width: auto; padding: 4px 8px; font-size: 12px; text-transform: none;">
+              <!-- Populated dynamically -->
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 20px; padding: 12px; background: var(--surface-subtle); border-radius: var(--radius-md); border: 1px solid var(--border);" class="no-print">
+          <span style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 8px;">Add Computer to Selected Lab</span>
+          <form id="addPcForm" style="display: flex; gap: 8px; max-width: 320px;">
+            <input type="number" id="addPcNumber" class="form-input" placeholder="PC Number (e.g. 31)" required min="1" max="999" style="text-transform: none;">
+            <button type="submit" class="btn btn-primary" style="width: auto; white-space: nowrap;">Add PC</button>
+          </form>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Lab</th>
+                <th>PC Number</th>
+                <th>Status</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="inventoryTbody">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 4: Audit Log -->
+      <section id="panelAudit" class="admin-card" style="display: none;">
+        <div class="admin-card-header no-print">
+          <h2>Administrative Action Log</h2>
+          <button type="button" id="refreshAuditBtn" class="btn btn-outline" style="width: auto; padding: 4px 10px; font-size: 12px;">Refresh</button>
+        </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+            <tbody id="auditTbody">
+              <tr>
+                <td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 24px;">Loading logs...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <!-- Clear Break Confirmation Modal -->
+  <div id="clearBreakModal" class="modal-overlay" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h2>Clear Break Timer</h2>
+          <div id="clearModalSubtitle" class="modal-subtitle">Reset computer to blank</div>
+        </div>
+        <button type="button" id="clearModalCloseBtn" class="modal-close-btn">&times;</button>
+      </div>
+
+      <div class="form-group">
+        <label for="clearReasonInput" class="form-label">Reason for Override (Logged to audit trail)</label>
+        <input type="text" id="clearReasonInput" class="form-input" value="Student returned / PC abandoned" style="text-transform: none;">
+      </div>
+
+      <div style="display: flex; gap: 8px; margin-top: 20px;">
+        <button type="button" id="confirmClearBtn" class="btn btn-danger">Confirm Clear Timer</button>
+        <button type="button" id="cancelClearBtn" class="btn btn-outline">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./assets/js/admin.js"></script>
+</body>
+</html>

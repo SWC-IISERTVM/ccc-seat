@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Computer Lab Break-Timer</title>
+  <meta name="description" content="College computer lab 15-minute break timer. Simple, anonymous, real-time break countdowns.">
+  <link rel="stylesheet" href="./assets/css/styles.css">
+</head>
+<body>
+
+  <!-- Screen reader live region for accessibility -->
+  <div id="ariaLive" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Header -->
+  <header class="site-header">
+    <div class="header-inner">
+      <h1 class="site-title">
+        <a href="./index.html">Computer Lab Break-Timer</a>
+      </h1>
+      <div class="header-meta">
+        <div id="connectionBadge" class="connection-badge is-connecting" title="Database connection status">
+          <span class="status-dot"></span>
+          <span id="statusText">Connecting...</span>
+        </div>
+        <a href="./admin.html" class="admin-link">Staff Login</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container">
+
+    <!-- Offline Warning Banner -->
+    <div id="offlineBanner" class="banner-offline" role="alert">
+      <span>Offline: Unable to reach database. Data may be out of date. Check computer in person.</span>
+    </div>
+
+    <!-- Permanent Notice & Belongings Policy -->
+    <section class="notice-card" aria-label="Lab Policy Notice">
+      <div class="notice-vacancy">
+        Blank means no break timer is active. It does not confirm the computer is free. Check in person and follow the lab's belongings policy.
+      </div>
+      <div id="belongingsNotice" class="notice-belongings">
+        Unattended belongings may be moved after the 15-minute break period has elapsed. Please ensure you return before the timer expires.
+      </div>
+    </section>
+
+    <!-- Lab Tabs & Legend -->
+    <section class="dashboard-controls">
+      <nav id="labTabs" class="lab-tabs" role="tablist" aria-label="Computer Labs">
+        <!-- Injected dynamically: Lab 1, Lab 2 -->
+      </nav>
+
+      <div class="legend" aria-label="Status Legend">
+        <div class="legend-item">
+          <span class="legend-box is-blank" aria-hidden="true"></span>
+          <span>Blank</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-box is-break" aria-hidden="true"></span>
+          <span>On Break (15m)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Computer Grid -->
+    <section>
+      <h2 class="sr-only">Computer Status Grid</h2>
+      <div id="pcGrid" class="pc-grid">
+        <div class="grid-placeholder">Loading computers...</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Break Modal / Mobile Bottom Sheet -->
+  <div id="breakModal" class="modal-overlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h2 id="modalTitle">Select Computer</h2>
+          <div id="modalSubtitle" class="modal-subtitle">No active break timer</div>
+        </div>
+        <button type="button" id="modalCloseBtn" class="modal-close-btn" aria-label="Close dialog">&times;</button>
+      </div>
+
+      <div id="modalBody">
+        <!-- Rendered dynamically by dashboard.js -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <span>Computer Lab Break-Timer</span>
+      <span>15-Minute Break Window &bull; Rolling 60-Minute Cooldown</span>
+    </div>
+  </footer>
+
+  <!-- Application Logic (ES Modules) -->
+  <script type="module" src="./assets/js/dashboard.js"></script>
+
+</body>
+</html>
