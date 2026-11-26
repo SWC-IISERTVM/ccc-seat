@@ -15,9 +15,19 @@
   <!-- Header -->
   <header class="site-header">
     <div class="header-inner">
-      <h1 class="site-title">
-        <a href="./index.html">Computer Lab Break-Timer</a>
-      </h1>
+      <a href="./index.html" class="brand-group">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+        </div>
+        <div class="brand-text-wrap">
+          <span class="site-title">Computer Lab Break-Timer</span>
+          <span class="site-subtitle-tag">Live Break Monitor</span>
+        </div>
+      </a>
+
       <div class="header-meta">
         <div id="connectionBadge" class="connection-badge is-connecting" title="Database connection status">
           <span class="status-dot"></span>
@@ -33,23 +43,37 @@
 
     <!-- Offline Warning Banner -->
     <div id="offlineBanner" class="banner-offline" role="alert">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>
       <span>Offline: Unable to reach database. Data may be out of date. Check computer in person.</span>
     </div>
 
     <!-- Permanent Notice & Belongings Policy -->
     <section class="notice-card" aria-label="Lab Policy Notice">
-      <div class="notice-vacancy">
-        Blank means no break timer is active. It does not confirm the computer is free. Check in person and follow the lab's belongings policy.
+      <div class="notice-icon-wrap" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
       </div>
-      <div id="belongingsNotice" class="notice-belongings">
-        Unattended belongings may be moved after the 15-minute break period has elapsed. Please ensure you return before the timer expires.
+      <div class="notice-content">
+        <div class="notice-vacancy">
+          Blank means no break timer is active. It does not confirm the computer is free. Check in person and follow the lab's belongings policy.
+        </div>
+        <div id="belongingsNotice" class="notice-belongings">
+          Unattended belongings may be moved after the 15-minute break period has elapsed. Please ensure you return before the timer expires.
+        </div>
       </div>
     </section>
 
     <!-- Lab Tabs & Legend -->
     <section class="dashboard-controls">
       <nav id="labTabs" class="lab-tabs" role="tablist" aria-label="Computer Labs">
-        <!-- Injected dynamically: Lab 1, Lab 2 -->
+        <!-- Injected dynamically: CCC, IDC -->
       </nav>
 
       <div class="legend" aria-label="Status Legend">
@@ -69,6 +93,119 @@
       <h2 class="sr-only">Computer Status Grid</h2>
       <div id="pcGrid" class="pc-grid">
         <div class="grid-placeholder">Loading computers...</div>
+      </div>
+    </section>
+
+    <!-- Rules & How It Works Section -->
+    <section class="info-section" aria-labelledby="rulesHeading">
+      <div class="info-section-header">
+        <div class="section-tag">Guidelines & Instructions</div>
+        <h2 id="rulesHeading" class="section-title">Lab Break Rules & How It Works</h2>
+        <p class="section-desc">
+          A fair-use community system for students stepping away from their computer desks for short breaks.
+        </p>
+      </div>
+
+      <div class="rules-layout-grid">
+        <!-- Panel 1: How It Works -->
+        <div class="panel-card">
+          <h3 class="panel-card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+            How the system works
+          </h3>
+          <ol class="steps-list">
+            <li class="step-item">
+              <span class="step-number">1</span>
+              <span>The website is designed to display active break timers for computers in the lab.</span>
+            </li>
+            <li class="step-item">
+              <span class="step-number">2</span>
+              <span>If you need to step away temporarily, select your computer and activate the 15-minute break timer.</span>
+            </li>
+            <li class="step-item">
+              <span class="step-number">3</span>
+              <span>Your computer will display an active break countdown.</span>
+            </li>
+            <li class="step-item">
+              <span class="step-number">4</span>
+              <span>Return before the timer expires.</span>
+            </li>
+            <li class="step-item">
+              <span class="step-number">5</span>
+              <span>Once the timer expires, the computer automatically returns to its blank state.</span>
+            </li>
+            <li class="step-item">
+              <span class="step-number">6</span>
+              <span>A blank computer tile means that no active break timer exists. It does not confirm whether someone is physically occupying the computer.</span>
+            </li>
+          </ol>
+        </div>
+
+        <!-- Panel 2: Rules -->
+        <div class="panel-card">
+          <h3 class="panel-card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            </svg>
+            Community Rules
+          </h3>
+          <ul class="rules-list">
+            <li class="rule-item">
+              <div class="rule-heading">Rule 1 — 15-minute break limit</div>
+              <div class="rule-body">Every break is limited to 15 minutes. No extensions are permitted.</div>
+            </li>
+            <li class="rule-item">
+              <div class="rule-heading">Rule 2 — One break per hour</div>
+              <div class="rule-body">Each roll number can activate only one break within a rolling 60-minute period.</div>
+            </li>
+            <li class="rule-item">
+              <div class="rule-heading">Rule 3 — No computer reservation</div>
+              <div class="rule-body">This website is NOT a computer reservation system. You cannot reserve a computer by leaving your belongings on it.</div>
+            </li>
+            <li class="rule-item">
+              <div class="rule-heading">Rule 4 — Activate the timer before leaving</div>
+              <div class="rule-body">If you leave your computer without activating the break timer, the computer has no active digital break protection.</div>
+            </li>
+            <li class="rule-item">
+              <div class="rule-heading">Rule 5 — Timer expiry</div>
+              <div class="rule-body">Once the timer expires, the computer automatically returns to its blank state. Other students may then use the computer in accordance with the lab rules.</div>
+            </li>
+            <li class="rule-item">
+              <div class="rule-heading">Rule 6 — Follow the rules</div>
+              <div class="rule-body">Students are expected to respect the system and one another.</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Important Administrative Non-Enforcement Notice -->
+      <div class="disclaimer-card" role="note" aria-labelledby="disclaimerHeading">
+        <h3 id="disclaimerHeading" class="disclaimer-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+          Important Notice
+        </h3>
+        <div class="disclaimer-text">
+          <p>
+            This website is an independently developed utility intended to encourage fair and responsible use of computer lab facilities.
+            The rules displayed here are community guidelines and are not officially enforced by the college administration.
+            Students are expected to respect the break timers and follow the guidelines.
+          </p>
+          <p>
+            If someone does not follow the rules, leaves belongings without activating a timer, or interferes with another student's belongings, the website developers cannot guarantee any intervention, recovery or resolution.
+            Please use the system responsibly, respect other students and follow the applicable college lab policies.
+            The system is provided as a convenience and should not be treated as an official administrative authority.
+          </p>
+        </div>
       </div>
     </section>
 
@@ -94,8 +231,13 @@
   <!-- Footer -->
   <footer class="site-footer">
     <div class="footer-inner">
-      <span>Computer Lab Break-Timer</span>
-      <span>15-Minute Break Window &bull; Rolling 60-Minute Cooldown</span>
+      <div>
+        <div class="footer-brand">Computer Lab Break Timer</div>
+        <div class="footer-tagline">A simple student-built utility for responsible lab usage.</div>
+      </div>
+      <div class="footer-credit">
+        Made by T Shrayansh
+      </div>
     </div>
   </footer>
 
