@@ -197,6 +197,22 @@ export async function unsubscribeFromComputerUpdates() {
 // ------------------------------------------------------------------------------
 
 /**
+ * Admin Sign In with Google OAuth
+ */
+export async function adminSignInWithGoogle() {
+  const supabase = await getSupabase();
+  const cleanRedirect = window.location.origin + window.location.pathname;
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: cleanRedirect
+    }
+  });
+  if (error) throw error;
+  return data;
+}
+
+/**
  * Admin Sign In with Email & Password
  */
 export async function adminSignIn(email, password) {

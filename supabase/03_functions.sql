@@ -30,11 +30,15 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, extensions, pg_temp
 AS $$
+DECLARE
+    v_email TEXT;
 BEGIN
+    v_email := lower(coalesce(auth.jwt()->>'email', ''));
     RETURN EXISTS (
         SELECT 1
         FROM public.admin_users
         WHERE user_id = auth.uid()
+           OR (v_email <> '' AND lower(email) = v_email)
     );
 END;
 $$;
