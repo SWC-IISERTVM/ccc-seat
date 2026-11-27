@@ -694,6 +694,16 @@ body {
   border-radius: 1px;
 }
 
+.pc-tile-cooldown-tag {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
 .grid-placeholder {
   grid-column: 1 / -1;
   text-align: center;
@@ -740,6 +750,108 @@ body {
   color: var(--ink-secondary);
   margin-top: 4px;
   max-width: 640px;
+}
+
+.situation-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+@media (min-width: 768px) {
+  .situation-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+}
+
+.situation-card {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.situation-card.is-blank-guide {
+  border-left: 3px solid var(--ink-muted);
+}
+
+.situation-card.is-break-guide {
+  border-left: 3px solid var(--break-amber);
+}
+
+.situation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.situation-title {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink-primary);
+  margin: 0;
+}
+
+.situation-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+}
+
+.situation-badge.badge-blank {
+  background-color: var(--bg-secondary);
+  color: var(--ink-secondary);
+  border: 1px solid var(--border);
+}
+
+.situation-badge.badge-break {
+  background-color: var(--break-amber-tag-bg);
+  color: var(--break-amber-tag-text);
+  border: 1px solid var(--break-amber-border);
+}
+
+.situation-action {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-primary);
+  font-weight: 600;
+  margin: 0;
+}
+
+.situation-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.situation-list li {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-secondary);
+  position: relative;
+  padding-left: 14px;
+}
+
+.situation-list li::before {
+  content: "•";
+  position: absolute;
+  left: 2px;
+  color: var(--ink-muted);
 }
 
 .rules-dual-columns {

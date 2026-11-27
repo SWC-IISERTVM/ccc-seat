@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS public.computers (
     pc_number INTEGER NOT NULL,
     break_started_at TIMESTAMPTZ,
     break_expires_at TIMESTAMPTZ,
+    cooldown_expires_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_lab_pc UNIQUE (lab_id, pc_number)
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS public.computers (
 -- Indexes for fast lookup and public polling / realtime subscriptions
 CREATE INDEX IF NOT EXISTS idx_computers_lab_pc ON public.computers (lab_id, pc_number);
 CREATE INDEX IF NOT EXISTS idx_computers_expiry ON public.computers (break_expires_at) WHERE break_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_computers_cooldown ON public.computers (cooldown_expires_at) WHERE cooldown_expires_at IS NOT NULL;
 
 -- 4. PRIVATE APP_CONFIG Table
 -- Stores system settings, regex patterns, and the secret HMAC pepper.

@@ -460,6 +460,7 @@ function createPcTileElement(pc) {
 function updateTileVisual(tile, pc) {
   const isExpired = time.isBreakExpired(pc.break_expires_at);
   const isMyBreak = (state.myActiveBreak && state.myActiveBreak.computer_id === pc.id) || !!state.localTokens[pc.id];
+  const inCooldown = isExpired && time.isComputerInCooldown(pc.cooldown_expires_at);
 
   tile.className = 'pc-tile';
   if (state.connectionStatus === 'offline') {
@@ -469,11 +470,22 @@ function updateTileVisual(tile, pc) {
   if (isExpired) {
     // BLANK state: strictly neutral, no "available" or "free" wording
     tile.classList.add('is-blank');
-    tile.setAttribute('aria-label', `PC ${String(pc.pc_number).padStart(2, '0')}, blank`);
-    tile.innerHTML = `
-      <div class="pc-tile-number">PC ${String(pc.pc_number).padStart(2, '0')}</div>
-      <div class="pc-tile-status">BLANK</div>
-    `;
+    if (inCooldown) {
+      tile.classList.add('is-cooldown');
+      const rem = time.getRemainingTime(pc.cooldown_expires_at);
+      tile.setAttribute('aria-label', `PC ${String(pc.pc_number).padStart(2, '0')}, blank, in 15-minute cooldown for ${rem.mm}:${rem.ss}`);
+      tile.innerHTML = `
+        <div class="pc-tile-number">PC ${String(pc.pc_number).padStart(2, '0')}</div>
+        <div class="pc-tile-status">BLANK</div>
+        <div class="pc-tile-cooldown-tag" title="In 15-minute computer cooldown">Cooldown <span class="tabular-nums" data-cooldown-for="${pc.id}">${rem.mm}:${rem.ss}</span></div>
+      `;
+    } else {
+      tile.setAttribute('aria-label', `PC ${String(pc.pc_number).padStart(2, '0')}, blank`);
+      tile.innerHTML = `
+        <div class="pc-tile-number">PC ${String(pc.pc_number).padStart(2, '0')}</div>
+        <div class="pc-tile-status">BLANK</div>
+      `;
+    }
   } else {
     // ON BREAK state: amber accent, countdown
     const rem = time.getRemainingTime(pc.break_expires_at);
@@ -494,21 +506,26 @@ function updateTileVisual(tile, pc) {
 /**
  * Ticker interval runs every 1000ms:
  * - Updates countdown text for active break tiles in DOM
- * - Instantly transitions any timer that reached 00:00 to BLANK
+ * - Instantly transitions any timer that reached 00:00 to BLANK + 15m cooldown
+ * - Updates live cooldown text for computers in cooldown
  */
 function tickCountdowns() {
   const serverNow = time.getServerNow();
 
-  // Tick grid tiles
+  // 1. Tick active break grid tiles
   document.querySelectorAll('[data-timer-for]').forEach(el => {
     const pcId = el.dataset.timerFor;
     const pc = state.computers.get(pcId);
     if (!pc) return;
 
     if (time.isBreakExpired(pc.break_expires_at)) {
-      // Immediate frontend transition to BLANK
+      // Immediate frontend transition to BLANK and set 15m computer cooldown
+      const prevExpiry = pc.break_expires_at;
       pc.break_expires_at = null;
       pc.break_started_at = null;
+      if (!pc.cooldown_expires_at && prevExpiry) {
+        pc.cooldown_expires_at = new Date(new Date(prevExpiry).getTime() + 15 * 60 * 1000).toISOString();
+      }
       const tile = document.getElementById(`pc-tile-${pcId}`);
       if (tile) updateTileVisual(tile, pc);
       // Clean local storage if this device owned it
@@ -529,13 +546,47 @@ function tickCountdowns() {
     }
   });
 
-  // Tick active modal countdown if present
+  // 2. Tick computer-level cooldowns
+  document.querySelectorAll('[data-cooldown-for]').forEach(el => {
+    const pcId = el.dataset.cooldownFor;
+    const pc = state.computers.get(pcId);
+    if (!pc) return;
+
+    if (!time.isComputerInCooldown(pc.cooldown_expires_at)) {
+      pc.cooldown_expires_at = null;
+      const tile = document.getElementById(`pc-tile-${pcId}`);
+      if (tile) updateTileVisual(tile, pc);
+      if (state.activeModalPcId === pcId) {
+        renderModalContent(pc);
+      }
+    } else {
+      const rem = time.getRemainingTime(pc.cooldown_expires_at);
+      el.textContent = `${rem.mm}:${rem.ss}`;
+    }
+  });
+
+  // 3. Tick active modal countdown if present
   const modalCountdown = document.getElementById('modalActiveCountdown');
   if (modalCountdown && state.activeModalPcId) {
     const pc = state.computers.get(state.activeModalPcId);
     if (pc && !time.isBreakExpired(pc.break_expires_at)) {
       const rem = time.getRemainingTime(pc.break_expires_at);
       modalCountdown.textContent = `${rem.mm}:${rem.ss}`;
+    }
+  }
+
+  // 4. Tick active modal cooldown if present
+  const modalCooldownTimer = document.getElementById('modalCooldownTimer');
+  const cooldownDisabledBtn = document.getElementById('cooldownDisabledBtn');
+  if (state.activeModalPcId && (modalCooldownTimer || cooldownDisabledBtn)) {
+    const pc = state.computers.get(state.activeModalPcId);
+    if (pc && time.isComputerInCooldown(pc.cooldown_expires_at)) {
+      const rem = time.getRemainingTime(pc.cooldown_expires_at);
+      if (modalCooldownTimer) modalCooldownTimer.textContent = `${rem.mm}:${rem.ss}`;
+      if (cooldownDisabledBtn) cooldownDisabledBtn.textContent = `Unavailable during cooldown (${rem.mm}:${rem.ss})`;
+    } else if (pc) {
+      pc.cooldown_expires_at = null;
+      renderModalContent(pc);
     }
   }
 }
@@ -595,8 +646,35 @@ function renderModalContent(pc) {
 
   if (isExpired) {
     // --------------------------------------------------------------------------
-    // CASE A: PC IS BLANK -> Show Start Break Form (Requires @iisertvm Auth)
+    // CASE A: PC IS BLANK -> Show Start Break Form or Cooldown Notice
     // --------------------------------------------------------------------------
+    const inCooldown = time.isComputerInCooldown(pc.cooldown_expires_at);
+
+    if (inCooldown) {
+      // Computer is in 15-minute computer-level cooldown
+      const rem = time.getRemainingTime(pc.cooldown_expires_at);
+      dom.modalSubtitle.textContent = 'Blank — In Cooldown';
+      dom.modalBody.innerHTML = `
+        <div class="active-break-notice-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 16px; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-family: var(--font-mono); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-secondary);">15-Min Workstation Cooldown</span>
+            <span class="user-pill-tag" style="background: var(--bg-secondary); color: var(--ink-primary); font-family: var(--font-mono); font-weight: 700;" id="modalCooldownTimer">${rem.mm}:${rem.ss}</span>
+          </div>
+          <p style="font-size: 13.5px; margin: 0 0 10px 0; color: var(--ink-primary); line-height: 1.5;">
+            This computer recently concluded a 15-minute break and is in a <strong>15-minute cooldown period</strong>.
+          </p>
+          <p class="form-hint" style="margin: 0; line-height: 1.4; color: var(--ink-secondary);">
+            The workstation status is <strong>Blank</strong>. If nobody is physically present, students may respectfully set aside unattended belongings beside the workstation and use the computer. However, a new break timer cannot be activated on this computer until the cooldown period elapses.
+          </p>
+        </div>
+
+        <button type="button" id="cooldownDisabledBtn" class="btn btn-outline" disabled style="width: 100%; opacity: 0.65; cursor: not-allowed; font-family: var(--font-mono);">
+          Unavailable during cooldown (${rem.mm}:${rem.ss})
+        </button>
+      `;
+      return;
+    }
+
     if (!state.currentUser) {
       // Student is not signed in
       dom.modalSubtitle.textContent = 'Institutional verification required';
@@ -784,7 +862,15 @@ async function handleStartBreakSubmit(pc) {
         });
       } else if (res.error_code === 'COOLDOWN') {
         const eligibleTime = res.eligible_at ? time.formatLocalTime(res.eligible_at) : 'later';
-        showModalError(`Cooldown active: You can only take one break per rolling 60 minutes. Eligible again at ${eligibleTime}.`);
+        showModalError(`Account cooldown active: You can only take one break per rolling 60 minutes. Eligible again at ${eligibleTime}.`);
+      } else if (res.error_code === 'PC_COOLDOWN') {
+        if (res.cooldown_expires_at) {
+          pc.cooldown_expires_at = res.cooldown_expires_at;
+          state.computers.set(pc.id, pc);
+        }
+        showModalError(res.message || 'This computer is in a 15-minute cooldown following its previous break.');
+        renderGrid();
+        renderModalContent(pc);
       } else if (res.error_code === 'PC_BUSY') {
         showModalError('This computer already has an active break timer.');
         await loadComputersForLab(pc.lab_id);
@@ -830,6 +916,7 @@ async function handleStartBreakSubmit(pc) {
     // Update local computer model
     pc.break_started_at = res.break_started_at;
     pc.break_expires_at = res.break_expires_at;
+    pc.cooldown_expires_at = null;
     state.computers.set(pc.id, pc);
 
     // Update tile in grid
@@ -877,11 +964,12 @@ async function handleEndBreak(computerId, token = null) {
     saveLocalTokens();
     state.myActiveBreak = null;
 
-    // Reset computer in memory
+    // Reset computer in memory with 15m cooldown
     const pc = state.computers.get(computerId);
     if (pc) {
       pc.break_started_at = null;
       pc.break_expires_at = null;
+      pc.cooldown_expires_at = res.cooldown_expires_at || new Date(Date.now() + 15 * 60 * 1000).toISOString();
       state.computers.set(computerId, pc);
       const tile = document.getElementById(`pc-tile-${computerId}`);
       if (tile) updateTileVisual(tile, pc);

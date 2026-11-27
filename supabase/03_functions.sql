@@ -151,6 +151,7 @@ DECLARE
     v_active_break RECORD;
     v_last_started TIMESTAMPTZ;
     v_eligible_at TIMESTAMPTZ;
+    v_pc_cooldown_until TIMESTAMPTZ;
     v_raw_token TEXT;
     v_token_hash TEXT;
     v_now TIMESTAMPTZ;
@@ -201,7 +202,6 @@ BEGIN
     END IF;
 
     -- 3. Atomic reconciliation of naturally expired breaks before evaluating constraints
-    -- Guarantees expired timers cannot block users
     UPDATE public.break_history
     SET ended_at = scheduled_expires_at,
         end_reason = 'expired'
@@ -211,12 +211,18 @@ BEGIN
     UPDATE public.computers
     SET break_started_at = NULL,
         break_expires_at = NULL,
+        cooldown_expires_at = break_expires_at + interval '15 minutes',
         updated_at = clock_timestamp()
     WHERE break_expires_at IS NOT NULL
       AND break_expires_at <= clock_timestamp();
 
+    UPDATE public.computers
+    SET cooldown_expires_at = NULL,
+        updated_at = clock_timestamp()
+    WHERE cooldown_expires_at IS NOT NULL
+      AND cooldown_expires_at <= clock_timestamp();
+
     -- 4. Serialized transaction locking per user account (pg_advisory_xact_lock)
-    -- Serializes concurrent calls from the same student across devices/tabs
     PERFORM pg_advisory_xact_lock(hashtext('user:' || v_user_id::text));
 
     -- 5. Strict Account Constraint: Exactly ONE active break per account across both labs
@@ -254,7 +260,7 @@ BEGIN
         RETURN jsonb_build_object(
             'success', false,
             'error_code', 'COOLDOWN',
-            'message', 'Cooldown active: Each account can only initiate one break every rolling 60 minutes.',
+            'message', 'Account cooldown active: Each account can only initiate one break every rolling 60 minutes.',
             'eligible_at', to_char(v_eligible_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
         );
     END IF;
@@ -282,7 +288,40 @@ BEGIN
         );
     END IF;
 
-    -- 8. Compute timestamps (exactly 15-minute fixed duration)
+    -- 8. Computer-Level Cooldown (15 minutes after previous break expires/ends)
+    IF v_computer.cooldown_expires_at IS NOT NULL AND v_computer.cooldown_expires_at > clock_timestamp() THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'PC_COOLDOWN',
+            'message', 'This computer is in a 15-minute cooldown following its previous break. Another break cannot be started on this computer yet.',
+            'cooldown_expires_at', to_char(v_computer.cooldown_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            'remaining_seconds', ceil(extract(epoch from (v_computer.cooldown_expires_at - clock_timestamp())))
+        );
+    END IF;
+
+    SELECT (coalesce(ended_at, scheduled_expires_at) + interval '15 minutes') INTO v_pc_cooldown_until
+    FROM public.break_history
+    WHERE computer_id = v_computer.id
+      AND (coalesce(ended_at, scheduled_expires_at) + interval '15 minutes') > clock_timestamp()
+    ORDER BY started_at DESC
+    LIMIT 1;
+
+    IF v_pc_cooldown_until IS NOT NULL AND v_pc_cooldown_until > clock_timestamp() THEN
+        UPDATE public.computers
+        SET cooldown_expires_at = v_pc_cooldown_until,
+            updated_at = clock_timestamp()
+        WHERE id = v_computer.id;
+
+        RETURN jsonb_build_object(
+            'success', false,
+            'error_code', 'PC_COOLDOWN',
+            'message', 'This computer is in a 15-minute cooldown following its previous break. Another break cannot be started on this computer yet.',
+            'cooldown_expires_at', to_char(v_pc_cooldown_until, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            'remaining_seconds', ceil(extract(epoch from (v_pc_cooldown_until - clock_timestamp())))
+        );
+    END IF;
+
+    -- 9. Compute timestamps (exactly 15-minute fixed duration)
     v_now := clock_timestamp();
     v_expires_at := v_now + interval '15 minutes';
 
@@ -290,8 +329,7 @@ BEGIN
     v_raw_token := encode(gen_random_bytes(24), 'hex');
     v_token_hash := encode(digest(v_raw_token, 'sha256'), 'hex');
 
-    -- 9. Insert into break_history
-    -- Enforced by partial unique index uq_active_break_user and uq_active_break_computer
+    -- 10. Insert into break_history
     BEGIN
         INSERT INTO public.break_history (
             computer_id,
@@ -318,10 +356,11 @@ BEGIN
         );
     END;
 
-    -- 10. Update computer status
+    -- 11. Update computer status (clear cooldown on start)
     UPDATE public.computers
     SET break_started_at = v_now,
         break_expires_at = v_expires_at,
+        cooldown_expires_at = NULL,
         updated_at = v_now
     WHERE id = v_computer.id;
 
@@ -426,16 +465,18 @@ BEGIN
         end_reason = 'early_return'
     WHERE id = v_break.id;
 
-    -- Reset computer to BLANK
+    -- Reset computer to BLANK with 15-minute computer-level cooldown
     UPDATE public.computers
     SET break_started_at = NULL,
         break_expires_at = NULL,
+        cooldown_expires_at = clock_timestamp() + interval '15 minutes',
         updated_at = clock_timestamp()
     WHERE id = p_computer_id;
 
     RETURN jsonb_build_object(
         'success', true,
-        'message', 'Welcome back! Your break timer ended successfully. The computer is now blank.'
+        'message', 'Welcome back! Your break timer ended successfully. The computer is now blank and in a 15-minute cooldown.',
+        'cooldown_expires_at', to_char(clock_timestamp() + interval '15 minutes', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
     );
 END;
 $$;
@@ -507,12 +548,21 @@ BEGIN
     WHERE ended_at IS NULL
       AND scheduled_expires_at <= clock_timestamp();
 
+    -- Set 15-minute cooldown on computers whose break naturally expired
     UPDATE public.computers
     SET break_started_at = NULL,
         break_expires_at = NULL,
+        cooldown_expires_at = break_expires_at + interval '15 minutes',
         updated_at = clock_timestamp()
     WHERE break_expires_at IS NOT NULL
       AND break_expires_at <= clock_timestamp();
+
+    -- Clean up completed cooldowns
+    UPDATE public.computers
+    SET cooldown_expires_at = NULL,
+        updated_at = clock_timestamp()
+    WHERE cooldown_expires_at IS NOT NULL
+      AND cooldown_expires_at <= clock_timestamp();
 
     GET DIAGNOSTICS v_cleared_count = ROW_COUNT;
     RETURN v_cleared_count;
@@ -569,6 +619,7 @@ BEGIN
     UPDATE public.computers
     SET break_started_at = NULL,
         break_expires_at = NULL,
+        cooldown_expires_at = NULL,
         updated_at = clock_timestamp()
     WHERE id = p_computer_id;
 

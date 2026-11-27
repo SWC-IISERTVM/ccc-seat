@@ -44,6 +44,18 @@ export function isBreakExpired(expiresAt) {
 }
 
 /**
+ * Check whether a computer is currently in cooldown according to database time.
+ * @param {string|Date|null} cooldownExpiresAt
+ * @returns {boolean}
+ */
+export function isComputerInCooldown(cooldownExpiresAt) {
+  if (!cooldownExpiresAt) return false;
+  const cooldownTime = new Date(cooldownExpiresAt).getTime();
+  const serverNowTime = getServerNow().getTime();
+  return cooldownTime > serverNowTime;
+}
+
+/**
  * Calculate remaining time until break expiry
  * @param {string|Date|null} expiresAt
  * @returns {{ mm: string, ss: string, totalSeconds: number, isExpired: boolean }}

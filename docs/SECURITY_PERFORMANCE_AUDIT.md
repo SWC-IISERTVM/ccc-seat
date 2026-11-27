@@ -310,3 +310,56 @@ Investigation of the reported Google Sign-in failure revealed a critical race co
    - All OAuth redirects guarantee directory paths end with `/` or `.html`, preventing 301 redirect drops on GitHub Pages.
 5. **Idempotent RPC Permissions:**
    - Granted execute on `public.is_admin()` to `anon, authenticated` so unauthenticated checks return `FALSE` cleanly rather than throwing 401 errors.
+
+---
+
+## 11. Clarified Belongings Guidelines, Dual Cooldown & Student Welfare Access
+
+### 11.1 Unattended Belongings Guidelines
+The user-facing documentation and `index.html` were enhanced to establish clear, community-standard guidelines for unattended belongings across two distinct situations:
+
+- **Situation A: No Active Break — Blank Status:**
+  - If a computer shows `BLANK` and is physically unattended, students may carefully and respectfully move belongings immediately beside that workstation (e.g. side of the desk or floor beside the same chair) and use the computer.
+  - Strict safeguards: Do not throw, damage, open, search, take away, or unnecessarily handle belongings. Belongings must remain together, safe, and visible beside the seat.
+  - Informally reserving computers by leaving personal belongings behind is not permitted.
+- **Situation B: Active Break — On Break:**
+  - If a computer displays `ON BREAK` with an active countdown, students must not use that workstation even if physically unoccupied.
+  - An active break timer takes priority over the physical absence of the student for the full 15 minutes.
+  - If the student returns before expiry, the workstation remains theirs.
+  - If the 15-minute timer expires and the workstation remains unattended, students follow Situation A.
+- **Occupancy Clarification:**
+  - A `BLANK` status does not automatically prove physical vacancy; it strictly confirms that no active break timer exists. The website does not monitor physical occupancy. If occupancy is ambiguous, students should consult lab staff.
+
+### 11.2 Dual Cooldown Architecture
+Two independent cooldown restrictions are now enforced simultaneously at the database level:
+1. **Account-Level Cooldown (60 Minutes):**
+   - Each authenticated `@iisertvm.ac.in` student account can activate only one break per rolling 60-minute window across both labs.
+2. **Computer-Level Cooldown (15 Minutes):**
+   - When a computer's 15-minute break timer expires (or ends early via "I'm Back"), that specific computer enters a 15-minute cooldown period.
+   - During this cooldown, no student account can activate a new break timer on that computer.
+   - Workstation status remains **Blank** during the cooldown. A dedicated live badge indicates `Cooldown MM:SS`, and the break button is disabled with remaining time.
+   - Enforced atomically in Postgres (`start_break`, `end_break`, `expire_breaks`) via the `public.computers.cooldown_expires_at` column and `break_history` verification.
+
+### 11.3 Student Welfare Administrative Access
+- Added `studentwelfare@iisertvm.ac.in` to `public.admin_users`.
+- When the Student Welfare officer signs in with Google, `is_admin()` verifies the authenticated email and associates their stable `auth.uid()`.
+- Access to administrative RPCs (`admin_clear_break`, `admin_manage_computer`, `admin_list_active_breaks`) is restricted to verified administrators via `is_admin()`.
+
+### 11.4 Comprehensive Test Suite Results (12/12 Passed)
+
+| # | Test Scenario | Expected Outcome | Actual Outcome | Status |
+|---|---|---|---|---|
+| **1** | User A starts break on PC 01 in CCC | Success (`break_id` returned, duration = 15m) | `True` | **PASSED** |
+| **2** | User A attempts second break on PC 02 in CCC | Rejection (`ACTIVE_BREAK_EXISTS`) | `ACTIVE_BREAK_EXISTS` | **PASSED** |
+| **3** | User A attempts break on PC 01 in IDC (Cross-lab) | Rejection (`ACTIVE_BREAK_EXISTS`) | `ACTIVE_BREAK_EXISTS` | **PASSED** |
+| **4** | User B attempts break on PC 01 in CCC (PC Busy) | Rejection (`PC_BUSY`) | `PC_BUSY` | **PASSED** |
+| **5** | User A calls `get_my_active_break()` | Returns active break metadata for PC 01 | `has_active_break: True` | **PASSED** |
+| **6** | User A ends break early ("I'm Back") | Success; PC 01 reverts to BLANK & enters 15m cooldown | `True` (PC BLANK, cooldown set) | **PASSED** |
+| **7** | User A attempts new break on PC 02 within 60 minutes | Rejection (`COOLDOWN`, 60m account cooldown) | `COOLDOWN` | **PASSED** |
+| **8** | User B attempts break on PC 01 during 15m cooldown | Rejection (`PC_COOLDOWN`, 15m computer cooldown) | `PC_COOLDOWN` | **PASSED** |
+| **9** | User B starts break on PC 02 (eligible, not in cooldown) | Success (PC 02 available, User B eligible) | `True` | **PASSED** |
+| **10** | Imposter attempts break with `@gmail.com` | Rejection (`UNAUTHORIZED_DOMAIN`) | `UNAUTHORIZED_DOMAIN` | **PASSED** |
+| **11** | Unauthenticated caller calls `start_break()` | Rejection (`AUTH_REQUIRED`) | `AUTH_REQUIRED` | **PASSED** |
+| **12a**| Student Welfare account calls `is_admin()` | Returns `True` (Admin access granted) | `True` | **PASSED** |
+| **12b**| Regular student account calls `is_admin()` | Returns `False` (Admin access denied) | `False` | **PASSED** |
+| **12c**| External account calls `is_admin()` | Returns `False` (Admin access denied) | `False` | **PASSED** |

@@ -113,7 +113,7 @@ export async function fetchComputers(labId) {
     const supabase = await getSupabase();
     let query = supabase
       .from('computers')
-      .select('id, lab_id, pc_number, break_started_at, break_expires_at, updated_at')
+      .select('id, lab_id, pc_number, break_started_at, break_expires_at, cooldown_expires_at, updated_at')
       .order('pc_number', { ascending: true });
 
     if (labId) {

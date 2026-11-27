@@ -18,7 +18,8 @@ export const CONFIG = {
 
   // Application Defaults
   BREAK_DURATION_MINUTES: 15,
-  COOLDOWN_MINUTES: 60,
+  COOLDOWN_MINUTES: 60, // Account rolling cooldown (minutes)
+  COMPUTER_COOLDOWN_MINUTES: 15, // Computer cooldown after break expires (minutes)
   POLL_INTERVAL_MS: 30000, // 30 seconds polling fallback
   TIME_SYNC_INTERVAL_MS: 60000, // Sync database server time every 60 seconds
 
@@ -26,6 +27,6 @@ export const CONFIG = {
   STORAGE_ACTIVE_TOKENS: 'ccc_lab_break_active_tokens', // Stores client-side break tokens: { [computerId]: { token, rollPrefix, expiresAt } }
 
   // Default Policy Notices (Overridden dynamically if app_config provides customized text)
-  VACANCY_NOTICE: 'Blank means no break timer is active. It does not confirm the computer is free. Check in person and follow the lab\'s belongings policy.',
-  DEFAULT_BELONGINGS_POLICY: 'Unattended belongings may be moved after the 15-minute break period has elapsed. Please ensure you return before the timer expires.'
+  VACANCY_NOTICE: 'Blank means no break timer is active. It does not confirm physical vacancy. Check in person and follow the lab\'s unattended belongings guidance.',
+  DEFAULT_BELONGINGS_POLICY: 'If a computer is Blank and physically unattended, students may carefully move belongings to a safe spot beside the same workstation and use the computer. If On Break, do not use the computer until the 15-minute countdown expires.'
 };
