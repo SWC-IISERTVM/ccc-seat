@@ -2,8 +2,8 @@
 **Project:** Computer Lab Break Timer (CCC & IDC Facilities)  
 **Institution:** IISER Thiruvananthapuram  
 **Target Environments:**
-- Live Student Dashboard: `https://tshrayansh.github.io/ccc-seat/`
-- Staff Administration Portal: `https://tshrayansh.github.io/ccc-seat/admin.html`
+- Live Student Dashboard: `https://swc-iisertvm.github.io/ccc-seat/` (or `https://tshrayansh.github.io/ccc-seat/`)
+- Staff Administration Portal: `https://swc-iisertvm.github.io/ccc-seat/admin.html` (or `https://tshrayansh.github.io/ccc-seat/admin.html`)
 - Database & Backend: Supabase PostgreSQL (`onofshoylvogapvzahyx.supabase.co`)  
 **Audit Date:** November 2026  
 **Status:** All Findings Resolved & Verified  
