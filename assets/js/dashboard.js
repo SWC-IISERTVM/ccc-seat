@@ -322,7 +322,12 @@ async function handleUserSignOut() {
  */
 async function handleStudentGoogleSignIn(pc = null) {
   try {
-    let returnUrl = window.location.origin + window.location.pathname;
+    const origin = window.location.origin;
+    let pathname = window.location.pathname;
+    if (!pathname.endsWith('/') && !pathname.endsWith('.html')) {
+      pathname += '/';
+    }
+    let returnUrl = origin + pathname;
     if (pc) {
       const lab = state.labs.find(l => l.id === pc.lab_id);
       if (lab) {
@@ -969,9 +974,11 @@ function triggerDeepLinkPc(pcParam) {
 async function init() {
   loadLocalTokens();
 
-  // If OAuth redirected back with access token hash, clean URL without page reload
-  if (window.location.hash && window.location.hash.includes('access_token')) {
-    history.replaceState(null, document.title, window.location.pathname + window.location.search);
+  // Check for any OAuth errors redirected back from Google or Supabase
+  const authError = api.getUrlAuthError();
+  if (authError) {
+    showDomainAlert(`Sign-in notice: ${authError.description}`);
+    api.cleanAuthUrl();
   }
 
   // Modal event listeners
@@ -1023,6 +1030,9 @@ async function init() {
 
   // Listen for auth state changes (OAuth redirects or sign-outs)
   api.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+      api.cleanAuthUrl();
+    }
     const userId = session?.user?.id || null;
     if (userId === lastCheckedUserId && event !== 'SIGNED_OUT') {
       return; // Skip duplicate auth triggers on INITIAL_SESSION + SIGNED_IN

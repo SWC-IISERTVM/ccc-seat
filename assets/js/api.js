@@ -258,13 +258,89 @@ export async function unsubscribeFromComputerUpdates() {
 // ------------------------------------------------------------------------------
 
 /**
+ * Safely removes OAuth access tokens, refresh tokens, and codes from URL
+ * without triggering a page reload. Preserves query parameters like ?lab=ccc&pc=12.
+ */
+export function cleanAuthUrl() {
+  if (typeof window === 'undefined' || !window.history || !window.history.replaceState) return;
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+
+    // Remove hash if it contains auth tokens or errors
+    if (url.hash && (
+      url.hash.includes('access_token') ||
+      url.hash.includes('refresh_token') ||
+      url.hash.includes('error') ||
+      url.hash.includes('type=')
+    )) {
+      url.hash = '';
+      changed = true;
+    }
+
+    // Remove OAuth query parameters if present
+    const authParams = ['code', 'error', 'error_description', 'error_code'];
+    for (const p of authParams) {
+      if (url.searchParams.has(p)) {
+        url.searchParams.delete(p);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      const cleanUrl = url.pathname + (url.search ? url.search : '') + (url.hash ? url.hash : '');
+      window.history.replaceState(null, document.title, cleanUrl);
+    }
+  } catch (e) {
+    console.warn('Could not clean auth URL:', e);
+  }
+}
+
+/**
+ * Inspects URL hash and query string for OAuth redirect errors from Google or Supabase
+ */
+export function getUrlAuthError() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const url = new URL(window.location.href);
+    const hash = (url.hash || '').slice(1);
+    const hashParams = new URLSearchParams(hash);
+    const searchParams = url.searchParams;
+
+    const error = searchParams.get('error') || hashParams.get('error');
+    const errorDescription = searchParams.get('error_description') || hashParams.get('error_description');
+    const errorCode = searchParams.get('error_code') || hashParams.get('error_code');
+
+    if (error || errorDescription || errorCode) {
+      return {
+        error,
+        error_code: errorCode,
+        description: decodeURIComponent(errorDescription || error || 'Authentication failed').replace(/\+/g, ' ')
+      };
+    }
+  } catch (e) {
+    console.warn('Could not inspect auth error from URL:', e);
+  }
+  return null;
+}
+
+/**
  * Sign in with Google OAuth (Students & Administrators)
  * @param {string} [returnUrl] - URL to redirect back to after OAuth flow
  * @param {boolean} [restrictDomain=true] - Restrict account picker to @iisertvm.ac.in
  */
 export async function signInWithGoogle(returnUrl = null, restrictDomain = true) {
   const supabase = await getSupabase();
-  const cleanRedirect = returnUrl || (window.location.origin + window.location.pathname);
+  
+  let cleanRedirect = returnUrl;
+  if (!cleanRedirect && typeof window !== 'undefined') {
+    const origin = window.location.origin;
+    let pathname = window.location.pathname;
+    if (!pathname.endsWith('/') && !pathname.endsWith('.html')) {
+      pathname += '/';
+    }
+    cleanRedirect = origin + pathname;
+  }
   
   const queryParams = {
     prompt: 'select_account'
@@ -281,6 +357,9 @@ export async function signInWithGoogle(returnUrl = null, restrictDomain = true) 
     }
   });
   if (error) throw error;
+  if (data?.url && typeof window !== 'undefined') {
+    window.location.href = data.url;
+  }
   return data;
 }
 
@@ -294,12 +373,29 @@ export async function signOut() {
 }
 
 /**
- * Get current session and user object
+ * Get current session and user object.
+ * Resolves PKCE authorization codes if present in URL.
  */
 export async function getUserSession() {
   const supabase = await getSupabase();
+
+  // If OAuth code is in URL search params (PKCE flow), exchange code for session explicitly
+  if (typeof window !== 'undefined' && window.location.search && window.location.search.includes('code=')) {
+    try {
+      const { data: codeData, error: codeError } = await supabase.auth.exchangeCodeForSession(window.location.href);
+      if (!codeError && codeData?.session) {
+        cleanAuthUrl();
+        return codeData.session;
+      }
+    } catch (e) {
+      console.warn('PKCE exchange warning (falling back to getSession):', e.message);
+    }
+  }
+
   const { data: { session }, error } = await supabase.auth.getSession();
   if (error || !session) return null;
+
+  cleanAuthUrl();
   return session;
 }
 
@@ -335,7 +431,16 @@ export async function onAuthStateChange(callback) {
  * Admin Sign In with Google OAuth
  */
 export async function adminSignInWithGoogle() {
-  return signInWithGoogle(window.location.origin + window.location.pathname, false);
+  let cleanRedirect = null;
+  if (typeof window !== 'undefined') {
+    const origin = window.location.origin;
+    let pathname = window.location.pathname;
+    if (!pathname.endsWith('/') && !pathname.endsWith('.html')) {
+      pathname += '/admin.html';
+    }
+    cleanRedirect = origin + pathname;
+  }
+  return signInWithGoogle(cleanRedirect, false);
 }
 
 /**
@@ -359,12 +464,27 @@ export async function adminSignOut() {
 }
 
 /**
- * Get current session and check if user is admin
+ * Get current session and check if user is admin.
+ * Resolves PKCE authorization codes if present in URL.
  */
 export async function getAdminSession() {
   const supabase = await getSupabase();
+
+  if (typeof window !== 'undefined' && window.location.search && window.location.search.includes('code=')) {
+    try {
+      const { data: codeData, error: codeError } = await supabase.auth.exchangeCodeForSession(window.location.href);
+      if (!codeError && codeData?.session) {
+        cleanAuthUrl();
+      }
+    } catch (e) {
+      console.warn('Admin PKCE exchange warning:', e.message);
+    }
+  }
+
   const { data: { session }, error } = await supabase.auth.getSession();
   if (error || !session) return null;
+
+  cleanAuthUrl();
 
   // Verify against is_admin() RPC
   const { data: isAdmin, error: rpcError } = await supabase.rpc('is_admin');

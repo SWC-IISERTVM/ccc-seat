@@ -279,3 +279,34 @@ Investigation revealed that the warning `[OFFLINE] Unable to synchronize with da
 4. **Dual-CDN Failover & Client Promise Reset:**
    - `getSupabase()` now includes automatic fallback from jsDelivr to esm.sh.
    - Resets the client promise on initialization errors so future requests can retry rather than permanently caching a failure.
+
+---
+
+## 10. Authentication Token Lifecycle & OAuth Redirect Hardening
+
+### 10.1 Root Cause of Google Sign-In Failure
+Investigation of the reported Google Sign-in failure revealed a critical race condition in the frontend initialization sequence:
+
+1. **Premature `replaceState` URL Wiping:**
+   - At the entry point of `dashboard.js` and `admin.js`, an eager synchronous call to `history.replaceState(...)` was stripping `window.location.hash` before `@supabase/supabase-js` was even imported or initialized by the lazy `getSupabase()` promise.
+   - Because Supabase's `detectSessionInUrl: true` looks at `window.location.hash` to extract `#access_token=...` and `#refresh_token=...`, the hash was already wiped clean by the time the SDK loaded. Consequently, `getSession()` returned `null`, leaving users in an unauthenticated state upon returning from Google OAuth.
+2. **Missing PKCE Authorization Code Exchange:**
+   - When OAuth flows returned authorization codes (`?code=...`), the client did not explicitly await `exchangeCodeForSession()`, potentially failing to exchange codes on slower connections or strict browser contexts.
+3. **Silent OAuth Error Dropping:**
+   - When Google or Supabase redirected back with error query/hash parameters (e.g. `access_denied`, `unauthorized_client`), errors were completely ignored and wiped without notifying the user.
+4. **Directory Trailing Slash Normalization:**
+   - Redirect URLs generated without trailing slashes (`/ccc-seat` instead of `/ccc-seat/`) could trigger GitHub Pages 301 redirects that dropped URL fragment hashes in certain browsers.
+
+### 10.2 Architectural Resolution
+1. **Deferred & Safe URL Sanitization (`api.cleanAuthUrl`):**
+   - Removed all synchronous hash wiping at script startup.
+   - Centralized URL sanitization into `api.cleanAuthUrl()` which is invoked **only after** `supabase.auth.getSession()` or `onAuthStateChange('SIGNED_IN')` successfully persists the session to `localStorage`.
+   - Preserves non-auth deep link query parameters (`?lab=...&pc=...`) while cleanly removing sensitive tokens.
+2. **Explicit PKCE Code Exchange:**
+   - `getUserSession()` and `getAdminSession()` now detect `window.location.search.includes('code=')` and explicitly execute `supabase.auth.exchangeCodeForSession(window.location.href)`.
+3. **User-Facing OAuth Error Handler (`api.getUrlAuthError`):**
+   - Parses `error` and `error_description` from URL fragments/queries and displays descriptive feedback via `showDomainAlert` and `dom.loginError`.
+4. **Trailing Slash Normalization:**
+   - All OAuth redirects guarantee directory paths end with `/` or `.html`, preventing 301 redirect drops on GitHub Pages.
+5. **Idempotent RPC Permissions:**
+   - Granted execute on `public.is_admin()` to `anon, authenticated` so unauthenticated checks return `FALSE` cleanly rather than throwing 401 errors.

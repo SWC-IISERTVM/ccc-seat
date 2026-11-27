@@ -741,7 +741,7 @@ GRANT EXECUTE ON FUNCTION public.get_my_active_break() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.expire_breaks() TO anon, authenticated;
 
 -- Admin execution grants (functions internally enforce is_admin())
-GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_clear_break(UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_list_active_breaks() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_manage_computer(TEXT, UUID, INTEGER) TO authenticated;

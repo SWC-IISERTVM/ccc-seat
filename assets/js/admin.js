@@ -519,6 +519,9 @@ function setupListeners() {
 
   // Handle auth state changes from Google OAuth redirect or sign out
   api.onAdminAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+      api.cleanAuthUrl();
+    }
     if (session) {
       const adminSession = await api.getAdminSession();
       if (adminSession) {
@@ -537,9 +540,13 @@ function setupListeners() {
   setInterval(tickAdminCountdowns, 1000);
 }
 
-// Start
-if (window.location.hash && window.location.hash.includes('access_token')) {
-  history.replaceState(null, document.title, window.location.pathname + window.location.search);
+// Start: check for URL OAuth errors first
+const authError = api.getUrlAuthError();
+if (authError) {
+  dom.loginError.textContent = `Sign-in notice: ${authError.description}`;
+  dom.loginError.classList.add('is-visible');
+  api.cleanAuthUrl();
 }
+
 setupListeners();
 checkAuth();
